@@ -26,7 +26,9 @@ import {
   preparePiInvocationHome,
 } from "../harnesses/pi-home.ts";
 import { type PiModelPlan, planPiModel } from "../harnesses/pi-model.ts";
+import { createPiStreamTap } from "../harnesses/pi-stream.ts";
 import { AgentSessionError } from "../session-error.ts";
+import { openStepStream, type StepStream } from "../step-stream.ts";
 import type {
   Driver,
   DriverContext,
@@ -68,11 +70,13 @@ function promptFor(request: AgentRequest): string {
 }
 
 export interface PiDriverDependencies {
+  openStepStream(): StepStream | undefined;
   preparePiHome(runId: string, plan: PiModelPlan): Promise<PreparedPiHome>;
   executePi(options: PiExecutionOptions): Promise<ExecutorGeneration>;
 }
 
 const defaultDependencies: PiDriverDependencies = {
+  openStepStream,
   preparePiHome: async (runId, source) => {
     await recordRunDirectory("pi-home", runId, piRunStatePath(runId));
     return preparePiInvocationHome(runId, source);
@@ -129,6 +133,7 @@ export function createPiDriver(deps: PiDriverDependencies = defaultDependencies)
     const prepared = await deps.preparePiHome(context.metadata.workflowRunId, model);
     const { resume } = request;
     const sessionId = resume?.id ?? `jigs-${randomUUID()}`;
+    let tap: ReturnType<typeof createPiStreamTap> | undefined;
     try {
       const sessionFile =
         resume === undefined ? undefined : piSessionFile(prepared.sessionDir, sessionId);
@@ -156,7 +161,15 @@ export function createPiDriver(deps: PiDriverDependencies = defaultDependencies)
               ]),
             ];
       const mcpEnvironment = new Set(piMcpEnvironmentVariables(harness.mcpServers ?? {}));
+      const stream = deps.openStepStream();
+      if (stream !== undefined)
+        tap = createPiStreamTap(stream, {
+          harness: "pi",
+          cwd: request.cwd,
+          resume: resume !== undefined,
+        });
       const generation = await deps.executePi({
+        onStdout: tap?.write,
         args: [
           "--mode",
           "json",
@@ -189,7 +202,11 @@ export function createPiDriver(deps: PiDriverDependencies = defaultDependencies)
         const message = `Pi reported session ${JSON.stringify(reported)} after jigs requested ${sessionId}`;
         throw new Error(message);
       }
+      await tap?.end();
       return generation;
+    } catch (error) {
+      await tap?.end(error);
+      throw error;
     } finally {
       prepared.cleanup();
     }

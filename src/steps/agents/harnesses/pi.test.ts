@@ -214,3 +214,35 @@ test("Pi execution rejects a malformed successful stream", async () => {
     "invalid JSON event on line 1",
   );
 });
+
+test.each(["recording", "throwing"] as const)(
+  "Pi returns the identical result with a %s stdout observer",
+  async (mode) => {
+    const bin = writePi([...successEvents, "exit 0"]);
+    const options = { args: [], cwd: tmp, env: { PATH: bin } };
+    const expected = await executePi(options);
+    const chunks: string[] = [];
+    await expect(
+      executePi({
+        ...options,
+        onStdout(chunk) {
+          chunks.push(chunk);
+          if (mode === "throwing") throw new Error("observer failed");
+        },
+      }),
+    ).resolves.toEqual(expected);
+    expect(chunks.join("")).toContain('"text":"finished"');
+    expect(chunks.join("")).toContain('"type":"agent_settled"');
+  },
+);
+
+test("a malformed line still fails the Pi result with a stdout observer", async () => {
+  const bin = writePi([...successEvents, "printf '%s\\n' '{broken'", "exit 0"]);
+  const options = { args: [], cwd: tmp, env: { PATH: bin } };
+  const withoutTap = await executePi(options).catch((error: Error) => error.message);
+  const chunks: string[] = [];
+  await expect(
+    executePi({ ...options, onStdout: (chunk) => void chunks.push(chunk) }),
+  ).rejects.toThrow(withoutTap as string);
+  expect(chunks.join("")).toContain("{broken");
+});

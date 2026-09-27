@@ -8,6 +8,7 @@ export type PiExecutionOptions = PiReduceOptions & {
   cwd: string;
   env: Record<string, string>;
   signal?: AbortSignal;
+  onStdout?: (chunk: string) => void;
 };
 
 const FORCE_KILL_DELAY_MS = 1_000;
@@ -94,7 +95,7 @@ export async function stopPiProcesses(): Promise<void> {
 export function executePi(options: PiExecutionOptions): Promise<ExecutorGeneration> {
   if (options.signal?.aborted)
     return Promise.reject(options.signal.reason ?? new Error("Pi execution was aborted"));
-  return new Promise((resolve, reject) => {
+  return new Promise<ExecutorGeneration>((resolve, reject) => {
     const grouped = process.platform !== "win32";
     const child = spawn(resolvePiExecutable(options.env), options.args, {
       cwd: options.cwd,
@@ -116,6 +117,11 @@ export function executePi(options: PiExecutionOptions): Promise<ExecutorGenerati
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
       stdout += chunk;
+      try {
+        options.onStdout?.(chunk);
+      } catch {
+        // Observers cannot change the buffered output or the process result.
+      }
     });
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
       stderr += chunk;

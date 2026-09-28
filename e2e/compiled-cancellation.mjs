@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -16,18 +18,166 @@ const POLL_MS = 25;
 const TIMEOUT_MS = 30_000;
 const SERVICE_TIMEOUT_MS = 90_000;
 const DRAIN_MS = 1_000;
+const PI_STOP_BUDGET_MS = 5_000;
+
+// A stand-in for pi: records its launch and pid, starts a child that ignores
+// SIGTERM, then hangs, or waits for a release file and answers like Pi does.
+const controlledPi = `const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+const { mode, dir } = JSON.parse(args.at(-1));
+fs.appendFileSync(path.join(dir, "launches"), "launch\\n");
+process.on("SIGTERM", () => {});
+const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+fs.writeFileSync(path.join(dir, "pids"), process.pid + " " + child.pid);
+const sessionId = args[args.indexOf("--session-id") + 1];
+const emit = (event) => process.stdout.write(JSON.stringify(event) + "\\n");
+setInterval(() => {
+  if (mode !== "finish" || !fs.existsSync(path.join(dir, "release"))) return;
+  emit({ type: "session", id: sessionId });
+  emit({ type: "agent_start" });
+  emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "finished" }], stopReason: "stop" } });
+  emit({ type: "agent_end", messages: [], willRetry: false });
+  emit({ type: "agent_settled" });
+  process.exit(0);
+}, 50);
+`;
+
+// A stand-in for the Codex app server: speaks enough JSON-RPC for one turn,
+// whose prompt carries its mode and directory. Once the turn starts it records
+// its launch, its supervisor's pid, its own and a SIGTERM-ignoring child's,
+// then hangs or waits for a release file and finishes the turn.
+const controlledCodex = `const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const readline = require("node:readline");
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method, params } = JSON.parse(line);
+  if (method === "initialize") send({ id, result: { userAgent: "codex_cli_rs/0.200.0", capabilities: {} } });
+  if (method === "thread/start") send({ id, result: { thread: { id: "thread-e2e" } } });
+  if (method !== "turn/start") return;
+  const prompt = params.input.map((item) => item.text ?? "").join("");
+  const { mode, dir } = JSON.parse(prompt.slice(prompt.indexOf("{"), prompt.lastIndexOf("}") + 1));
+  fs.appendFileSync(path.join(dir, "launches"), "launch\\n");
+  const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); console.log('up'); setInterval(() => {}, 1000)"], { stdio: ["ignore", "pipe", "ignore"] });
+  send({ id, result: { turn: { id: "turn-e2e", items: [], status: "inProgress" } } });
+  child.stdout.once("data", () => fs.writeFileSync(path.join(dir, "pids"), [process.ppid, process.pid, child.pid].join(" ")));
+  const timer = setInterval(() => {
+    if (mode !== "finish" || !fs.existsSync(path.join(dir, "release"))) return;
+    clearInterval(timer);
+    const turn = { threadId: "thread-e2e", turnId: "turn-e2e" };
+    send({ method: "item/agentMessage/delta", params: { ...turn, itemId: "msg-e2e", delta: "finished" } });
+    send({ method: "turn/completed", params: { threadId: "thread-e2e", turn: { id: "turn-e2e", items: [], status: "completed" } } });
+  }, 50);
+});
+`;
+
+function writeControlledCodex(root) {
+  const bin = path.join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  const executable = path.join(bin, "codex");
+  writeFileSync(executable, `#!${process.execPath}\n${controlledCodex}`);
+  chmodSync(executable, 0o755);
+  // The Codex driver links the login into each invocation home; the stand-in never reads it.
+  const home = path.join(root, "home");
+  mkdirSync(path.join(home, ".codex"), { recursive: true });
+  writeFileSync(path.join(home, ".codex", "auth.json"), "{}");
+  return { bin, home };
+}
+
+function writeControlledPi(root) {
+  const bin = path.join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  const executable = path.join(bin, "pi");
+  writeFileSync(executable, `#!${process.execPath}\n${controlledPi}`);
+  chmodSync(executable, 0o755);
+  return bin;
+}
+
+// A stand-in for Claude Code: speaks enough of its stream-json protocol for
+// the provider, reads its behaviour from the prompt, records its launch and
+// pid, starts a child that ignores SIGTERM, then hangs, or waits for a release
+// file and answers.
+const controlledClaude = `const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const readline = require("node:readline");
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.type === "control_request") {
+    send({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: {} } });
+    return;
+  }
+  if (message.type !== "user") return;
+  const content = message.message.content;
+  const text = typeof content === "string" ? content : content.map((part) => part.text ?? "").join("");
+  const { mode, dir } = JSON.parse(text.slice(text.indexOf("{")));
+  fs.appendFileSync(path.join(dir, "launches"), "launch\\n");
+  const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  fs.writeFileSync(path.join(dir, "pids"), process.pid + " " + child.pid);
+  send({ type: "system", subtype: "init", session_id: "e2e-session", cwd: process.cwd(), tools: [], mcp_servers: [] });
+  const timer = setInterval(() => {
+    if (mode !== "finish" || !fs.existsSync(path.join(dir, "release"))) return;
+    clearInterval(timer);
+    send({ type: "assistant", session_id: "e2e-session", message: { role: "assistant", content: [{ type: "text", text: "finished" }] } });
+    send({ type: "result", subtype: "success", is_error: false, result: "finished", session_id: "e2e-session", num_turns: 1, duration_ms: 1, duration_api_ms: 1, total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 } });
+  }, 50);
+});
+`;
+
+function writeControlledClaude(root) {
+  const bin = path.join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  const executable = path.join(bin, "claude");
+  writeFileSync(executable, `#!${process.execPath}\n${controlledClaude}`);
+  chmodSync(executable, 0o755);
+  return bin;
+}
+
+async function agentPids(dir) {
+  const file = path.join(dir, "pids");
+  await until(() => existsSync(file), `controlled agent never started in ${dir}`);
+  return readFileSync(file, "utf8").trim().split(" ").map(Number);
+}
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    throw error;
+  }
+}
 
 const fixtureSource = `import { appendFileSync, existsSync } from "node:fs";
 import { setTimeout as wait } from "node:timers/promises";
-import { defineWorkflow, type WorkflowInputs } from "@jigs-ai/jigs";
+import { defineWorkflow, harnesses, models, type WorkflowInputs } from "@jigs-ai/jigs";
+import { runAgent } from "#jigs/routines";
 import { createRunDirectory } from "#jigs/steps";
-import { RetryableError, sleep } from "workflow";
+import { FatalError, getWorkflowMetadata, RetryableError, sleep } from "workflow";
+import { getWorld } from "workflow/runtime";
 import { z } from "zod";
 
 export const cancelE2eInputs = z.object({
   gate: z.string(),
   marker: z.string(),
-  mode: z.enum(["active", "pending", "resilient", "retry", "turbo"]),
+  mode: z.enum([
+    "active",
+    "claude",
+    "codex",
+    "fatal",
+    "observe",
+    "ordinary",
+    "pending",
+    "pi",
+    "resilient",
+    "retry",
+    "turbo",
+  ]),
 });
 
 async function record(marker: string, line: string): Promise<void> {
@@ -40,6 +190,29 @@ async function gatedEffect(marker: string, gate: string): Promise<void> {
   appendFileSync(marker, "active-entered\\n");
   while (!existsSync(gate)) await wait(20);
   appendFileSync(marker, "active-effect\\n");
+}
+
+async function gatedThrow(marker: string, gate: string, fatal: boolean): Promise<void> {
+  "use step";
+  appendFileSync(marker, "throw-entered\\n");
+  while (!existsSync(gate)) await wait(20);
+  appendFileSync(marker, "throw-raised\\n");
+  if (fatal) throw new FatalError("synthetic step error after cancellation");
+  throw new Error("synthetic step error after cancellation");
+}
+
+async function observeRun(marker: string, label: string): Promise<void> {
+  "use step";
+  const { workflowRunId } = getWorkflowMetadata();
+  let seen: string;
+  try {
+    seen = (await (await getWorld()).runs.get(workflowRunId, { resolveData: "none" })).status;
+  } catch (error) {
+    seen = \`missing:\${error instanceof Error ? error.name : String(error)}\`;
+  }
+  appendFileSync(marker, \`\${label} run=\${seen}\\n\`);
+  // What an agent step does when its first status read cannot find the run.
+  if (seen.startsWith("missing:")) throw new Error("run not visible yet");
 }
 
 async function retryLater(marker: string): Promise<void> {
@@ -56,6 +229,36 @@ export async function cancelE2eWorkflow(inputs: WorkflowInputs<typeof cancelE2eI
     await record(inputs.marker, "active-successor");
     return;
   }
+  if (inputs.mode === "ordinary" || inputs.mode === "fatal") {
+    await createRunDirectory();
+    await gatedThrow(inputs.marker, inputs.gate, inputs.mode === "fatal");
+    await record(inputs.marker, "throw-successor");
+    return;
+  }
+  if (inputs.mode === "pi") {
+    const cwd = await createRunDirectory();
+    // The controlled pi on the service's PATH reads its behaviour from the prompt.
+    await runAgent({ harness: harnesses.pi(models.openrouter("e2e/fake")), cwd, prompt: inputs.marker });
+    await record(inputs.gate, "pi-successor");
+    return;
+  }
+  if (inputs.mode === "claude") {
+    const cwd = await createRunDirectory();
+    // The controlled claude on the service's PATH reads its behaviour from the prompt.
+    await runAgent({ harness: harnesses.claude({ model: "sonnet" }), cwd, prompt: inputs.marker });
+    await record(inputs.gate, "claude-successor");
+    return;
+  }
+  if (inputs.mode === "codex") {
+    const cwd = await createRunDirectory();
+    await runAgent({ harness: harnesses.codex({ model: "e2e/fake" }), cwd, prompt: inputs.marker });
+    await record(inputs.gate, "codex-successor");
+    return;
+  }
+  if (inputs.mode === "observe") {
+    await observeRun(inputs.marker, "observe-first-step");
+    return;
+  }
   if (inputs.mode === "retry") {
     await retryLater(inputs.marker);
     await record(inputs.marker, "retry-successor");
@@ -67,7 +270,7 @@ export async function cancelE2eWorkflow(inputs: WorkflowInputs<typeof cancelE2eI
     return;
   }
   if (inputs.mode === "resilient") {
-    await record(inputs.marker, "resilient-first-effect");
+    await observeRun(inputs.marker, "resilient-first-effect");
     return;
   }
   await record(inputs.marker, "turbo-first-effect");
@@ -113,6 +316,7 @@ export async function runCompiledCancellationMatrix({
   const fixtureRoot = path.join(scratch, "compiled-cancel");
   const dataHome = path.join(fixtureRoot, "data");
   const env = runtimeEnv(testUrl.toString(), dataHome, ports);
+  let serviceEnv = env;
 
   writeFileSync(
     path.join(factory, ".env"),
@@ -280,7 +484,7 @@ await (await getWorld()).close?.();`,
       "active delivery did not finish after cancellation",
     );
     await until(
-      () => lines(resilientMarker).includes("resilient-first-effect"),
+      () => lines(resilientMarker).some((line) => line.startsWith("resilient-first-effect")),
       "runInput delivery did not recreate and execute its missing run",
     );
     await until(
@@ -306,7 +510,12 @@ await (await getWorld()).close?.();`,
     assert.deepEqual(lines(activeMarker), ["active-entered", "active-effect"]);
     assert.deepEqual(lines(pendingMarker), []);
     assert.deepEqual(lines(turboMarker), []);
-    assert.deepEqual(lines(resilientMarker), ["resilient-first-effect"]);
+    const resilientSeen = lines(resilientMarker);
+    assert.match(resilientSeen.at(-1), /^resilient-first-effect run=(pending|running)$/);
+    for (const line of resilientSeen.slice(0, -1)) assert.match(line, /run=missing:/);
+    console.log(
+      `cancellation matrix: resilient first step observed ${resilientSeen.map((line) => line.split(" ")[1]).join(", ")}; an ordinary error retried it once the run existed`,
+    );
     assert.equal((await runtimeRun(resilientRunId, ports.service)).status, "completed");
     const activeTimeline = await runtimeTimeline(activeRunId, ports.service);
     assert.equal(
@@ -344,7 +553,7 @@ await (await getWorld()).close?.();`,
     assert.deepEqual(lines(activeMarker), ["active-entered", "active-effect"]);
     assert.deepEqual(lines(pendingMarker), []);
     assert.deepEqual(lines(turboMarker), []);
-    assert.deepEqual(lines(resilientMarker), ["resilient-first-effect"]);
+    assert.deepEqual(lines(resilientMarker), resilientSeen);
     assert.equal((await jobsFor(db, delayed.runId)).length, 0);
     assert.equal((await jobsFor(db, pendingRunId)).length, 0);
     assert.equal((await jobsFor(db, turboRunId)).length, 0);
@@ -372,6 +581,10 @@ await (await getWorld()).close?.();`,
     assert.equal(exhaustedTimeline.deadJobs.length, 1);
     assert.equal(exhaustedTimeline.deadJobs[0].attempts, exhaustedBefore.maxAttempts);
 
+    await proveStepErrorAfterCancel("ordinary");
+    await proveStepErrorAfterCancel("fatal");
+    await proveFirstStepVisibility();
+
     service("stop");
     serviceRunning = false;
     assertNoRecordedProcess(dataHome);
@@ -393,9 +606,13 @@ await (await getWorld()).close?.();`,
     assert.equal(existsSync(activeDirectory), false);
     assert.deepEqual(await historySnapshot(db, activeRunId), beforePrune);
 
+    await provePiCancellation();
+    await proveClaudeCancellation();
+    await proveCodexCancellation();
+
     const elapsedMs = Date.now() - startedAt;
     console.log(
-      `compiled cancellation matrix passed in ${elapsedMs}ms: pending, retry-scheduled, exhausted, active inline, default-turbo race, resilient first delivery, restart/redelivery, cleanup fencing, and offline kept-resource prune`,
+      `compiled cancellation matrix passed in ${elapsedMs}ms: pending, retry-scheduled, exhausted, active inline, default-turbo race, resilient first delivery, restart/redelivery, cleanup fencing, step errors after cancel, first-step run visibility, Pi agent stop, Claude Code agent stop, Codex agent stop, and offline kept-resource prune`,
     );
     return { elapsedMs };
   } finally {
@@ -412,8 +629,373 @@ await (await getWorld()).close?.();`,
     await admin.end().catch(() => undefined);
   }
 
+  // What the SDK records when the executing step throws after its run was
+  // cancelled. The agent step's cancellation error classification rests on it.
+  async function proveStepErrorAfterCancel(mode) {
+    const marker = path.join(fixtureRoot, `${mode}.markers`);
+    const gate = path.join(fixtureRoot, `${mode}.release`);
+    const launch = await launchInlineRun({ mode, marker, gate }, ports.service, db);
+    await until(
+      () => lines(marker).includes("throw-entered"),
+      `${mode} step did not reach its gate`,
+    );
+    cancel(launch.runId);
+    await assertCancelled(launch.runId, ports.service);
+    appendFileSync(gate, "release\n");
+    await until(
+      async () => (await jobsFor(db, launch.runId)).length === 0,
+      `${mode} deliveries did not drain after the step threw`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, DRAIN_MS * 2));
+    assert.equal((await jobsFor(db, launch.runId)).length, 0);
+    assert.deepEqual(lines(marker), ["throw-entered", "throw-raised"]);
+    await assertCancelled(launch.runId, ports.service);
+    const timeline = await runtimeTimeline(launch.runId, ports.service);
+    const thrown = timeline.steps.filter((step) => step.name.includes("gatedThrow"));
+    assert.equal(thrown.length, 1);
+    assert.equal(
+      timeline.steps.some((step) => step.name.includes("record")),
+      false,
+    );
+    reconcile();
+    const resource = (await runtimeRun(launch.runId, ports.service)).resources[0];
+    if (mode === "fatal") {
+      assert.equal(thrown[0].status, "failed");
+      assert.equal(resource.state, "kept", "a failed step leaves release free to decide");
+    } else {
+      assert.equal(thrown[0].status, "pending", "an ordinary error schedules a retry");
+      assert.equal(resource.state, "live", "a pending retry keeps release fenced as busy");
+    }
+    console.log(
+      `cancellation matrix: ${mode} error after cancel leaves the step ${thrown[0].status} (attempt ${thrown[0].attempt}), no second attempt, resource ${resource.state}`,
+    );
+  }
+
+  // Whether an agent step's status read can find its own run from the first
+  // step of a default-turbo start.
+  async function proveFirstStepVisibility() {
+    const seen = [];
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const marker = path.join(fixtureRoot, `observe-${attempt}.markers`);
+      const runId = await startRun({ mode: "observe", marker, gate: "unused" }, ports.service);
+      await until(
+        async () => (await runtimeRun(runId, ports.service)).status === "completed",
+        "observe run did not complete",
+      );
+      assert.equal(lines(marker).length, 1);
+      seen.push(lines(marker)[0].split(" ")[1]);
+    }
+    console.log(`cancellation matrix: default-turbo first steps observed ${seen.join(", ")}`);
+  }
+
+  function reconcile() {
+    return JSON.parse(
+      runNode(
+        `import { reconcileAutomaticRelease } from "@jigs-ai/jigs/automatic-release";
+import { getWorld } from "workflow/runtime";
+const report = await reconcileAutomaticRelease({ workflows: {} });
+console.log(JSON.stringify(report));
+await (await getWorld()).close?.();`,
+        env,
+      ),
+    );
+  }
+
+  // CLI cancel -> service -> World -> generated step -> real Pi driver -> a
+  // controlled pi and its child, beside a second Pi run that must not notice.
+  async function provePiCancellation() {
+    const piRoot = path.join(fixtureRoot, "pi");
+    const bin = writeControlledPi(piRoot);
+    const cancelledDir = path.join(piRoot, "cancelled");
+    const survivorDir = path.join(piRoot, "survivor");
+    mkdirSync(cancelledDir, { recursive: true });
+    mkdirSync(survivorDir, { recursive: true });
+    // Two workers, so the survivor's step runs beside the cancelled one.
+    writeFileSync(
+      path.join(factory, ".env"),
+      `WORKFLOW_POSTGRES_URL=${testUrl.toString()}\nWORKFLOW_TARGET_WORLD=@workflow/world-postgres\nWORKFLOW_POSTGRES_WORKER_CONCURRENCY=2\nWORKFLOW_POSTGRES_APPLICATION_MANAGED_SHUTDOWN=1\n`,
+    );
+    serviceEnv = {
+      ...env,
+      PATH: `${bin}${path.delimiter}${env.PATH}`,
+      OPENROUTER_API_KEY: "e2e-never-sent",
+      WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "2",
+    };
+    service("start");
+    serviceRunning = true;
+
+    const cancelled = await launchInlineRun(
+      {
+        mode: "pi",
+        marker: JSON.stringify({ mode: "hang", dir: cancelledDir }),
+        gate: path.join(cancelledDir, "successor"),
+      },
+      ports.service,
+      db,
+    );
+    const cancelledPids = await agentPids(cancelledDir);
+    const survivor = await launchInlineRun(
+      {
+        mode: "pi",
+        marker: JSON.stringify({ mode: "finish", dir: survivorDir }),
+        gate: path.join(survivorDir, "successor"),
+      },
+      ports.service,
+      db,
+    );
+    const survivorPids = await agentPids(survivorDir);
+
+    cancel(cancelled.runId);
+    const cancelledAt = Date.now();
+    await until(
+      () => !cancelledPids.some(alive),
+      "the cancelled run's pi or its child outlived the 5s budget",
+      PI_STOP_BUDGET_MS,
+    );
+    const stopMs = Date.now() - cancelledAt;
+    cancel(cancelled.runId);
+    await assertCancelled(cancelled.runId, ports.service);
+    assert.ok(survivorPids.every(alive), "stopping one run's pi reached another run's pi");
+    await until(
+      async () => (await jobsFor(db, cancelled.runId)).length === 0,
+      "the cancelled pi run's deliveries did not drain",
+    );
+
+    appendFileSync(path.join(survivorDir, "release"), "release\n");
+    await until(
+      async () => (await runtimeRun(survivor.runId, ports.service)).status === "completed",
+      "the other pi run did not complete after the cancellation",
+    );
+    assert.ok(!survivorPids.some(alive), "the finished pi's child outlived its step");
+    assert.deepEqual(lines(path.join(survivorDir, "successor")), ["pi-successor"]);
+
+    await new Promise((resolve) => setTimeout(resolve, DRAIN_MS * 2));
+    assert.deepEqual(lines(path.join(cancelledDir, "launches")), ["launch"], "pi was relaunched");
+    assert.deepEqual(lines(path.join(cancelledDir, "successor")), []);
+    assert.equal((await jobsFor(db, cancelled.runId)).length, 0);
+    await assertCancelled(cancelled.runId, ports.service);
+    const timeline = await runtimeTimeline(cancelled.runId, ports.service);
+    const agentSteps = timeline.steps.filter((step) => /agent/i.test(step.name));
+    assert.equal(agentSteps.length, 1, JSON.stringify(timeline.steps));
+    assert.equal(agentSteps[0].status, "failed");
+    assert.equal(agentSteps[0].attempt, 1);
+    assert.match(
+      serviceLogs(dataHome),
+      new RegExp(
+        `RunCancelledError: run ${cancelled.runId} was cancelled, so jigs stopped its agent`,
+      ),
+    );
+    reconcile();
+    assert.equal(
+      (await runtimeRun(cancelled.runId, ports.service)).resources.find(
+        (resource) => resource.kind === "run-directory",
+      )?.state,
+      "kept",
+      "the failed agent step left release free to decide",
+    );
+    await Promise.all([cancelled.completion, survivor.completion]);
+
+    service("stop");
+    serviceRunning = false;
+    serviceEnv = env;
+    console.log(
+      `cancellation matrix: CLI cancel stopped a real Pi driver's pi and child in ${stopMs}ms; the agent step failed once with no retry or successor, a repeated cancel was safe, and another Pi run finished`,
+    );
+  }
+
+  // CLI cancel -> service -> World -> generated step -> real Claude driver and
+  // provider -> a controlled claude and its child, beside a second Claude run
+  // that must not notice and whose leftover child is stopped when it finishes.
+  async function proveClaudeCancellation() {
+    const claudeRoot = path.join(fixtureRoot, "claude");
+    const bin = writeControlledClaude(claudeRoot);
+    const cancelledDir = path.join(claudeRoot, "cancelled");
+    const survivorDir = path.join(claudeRoot, "survivor");
+    mkdirSync(cancelledDir, { recursive: true });
+    mkdirSync(survivorDir, { recursive: true });
+    serviceEnv = {
+      ...env,
+      PATH: `${bin}${path.delimiter}${env.PATH}`,
+      WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "2",
+    };
+    service("start");
+    serviceRunning = true;
+
+    const cancelled = await launchInlineRun(
+      {
+        mode: "claude",
+        marker: JSON.stringify({ mode: "hang", dir: cancelledDir }),
+        gate: path.join(cancelledDir, "successor"),
+      },
+      ports.service,
+      db,
+    );
+    const cancelledPids = await agentPids(cancelledDir);
+    const survivor = await launchInlineRun(
+      {
+        mode: "claude",
+        marker: JSON.stringify({ mode: "finish", dir: survivorDir }),
+        gate: path.join(survivorDir, "successor"),
+      },
+      ports.service,
+      db,
+    );
+    const survivorPids = await agentPids(survivorDir);
+
+    cancel(cancelled.runId);
+    const cancelledAt = Date.now();
+    await until(
+      () => !cancelledPids.some(alive),
+      "the cancelled run's claude or its child outlived the 5s budget",
+      PI_STOP_BUDGET_MS,
+    );
+    const stopMs = Date.now() - cancelledAt;
+    await assertCancelled(cancelled.runId, ports.service);
+    assert.ok(survivorPids.every(alive), "stopping one run's claude reached another run's claude");
+    await until(
+      async () => (await jobsFor(db, cancelled.runId)).length === 0,
+      "the cancelled claude run's deliveries did not drain",
+    );
+
+    appendFileSync(path.join(survivorDir, "release"), "release\n");
+    await until(
+      async () => (await runtimeRun(survivor.runId, ports.service)).status === "completed",
+      "the other claude run did not complete after the cancellation",
+    );
+    assert.ok(!survivorPids.some(alive), "the finished claude's child outlived its step");
+    assert.deepEqual(lines(path.join(survivorDir, "successor")), ["claude-successor"]);
+
+    await new Promise((resolve) => setTimeout(resolve, DRAIN_MS * 2));
+    assert.deepEqual(
+      lines(path.join(cancelledDir, "launches")),
+      ["launch"],
+      "claude was relaunched",
+    );
+    assert.deepEqual(lines(path.join(cancelledDir, "successor")), []);
+    const timeline = await runtimeTimeline(cancelled.runId, ports.service);
+    const agentSteps = timeline.steps.filter((step) => /agent/i.test(step.name));
+    assert.equal(agentSteps.length, 1, JSON.stringify(timeline.steps));
+    assert.equal(agentSteps[0].status, "failed");
+    assert.equal(agentSteps[0].attempt, 1);
+    assert.match(
+      serviceLogs(dataHome),
+      new RegExp(
+        `RunCancelledError: run ${cancelled.runId} was cancelled, so jigs stopped its agent`,
+      ),
+    );
+    await Promise.all([cancelled.completion, survivor.completion]);
+
+    service("stop");
+    serviceRunning = false;
+    serviceEnv = env;
+    console.log(
+      `cancellation matrix: CLI cancel stopped a real Claude driver's claude and child in ${stopMs}ms; the agent step failed once with no retry or successor, and another Claude run finished without leaving its child behind`,
+    );
+  }
+
+  // CLI cancel -> service -> World -> generated step -> real Codex driver and
+  // provider -> the launcher, a controlled app server and its child, beside a
+  // second Codex run that must not notice.
+  async function proveCodexCancellation() {
+    const codexRoot = path.join(fixtureRoot, "codex");
+    const { bin, home } = writeControlledCodex(codexRoot);
+    const cancelledDir = path.join(codexRoot, "cancelled");
+    const survivorDir = path.join(codexRoot, "survivor");
+    mkdirSync(cancelledDir, { recursive: true });
+    mkdirSync(survivorDir, { recursive: true });
+    writeFileSync(
+      path.join(factory, ".env"),
+      `WORKFLOW_POSTGRES_URL=${testUrl.toString()}\nWORKFLOW_TARGET_WORLD=@workflow/world-postgres\nWORKFLOW_POSTGRES_WORKER_CONCURRENCY=2\nWORKFLOW_POSTGRES_APPLICATION_MANAGED_SHUTDOWN=1\n`,
+    );
+    serviceEnv = {
+      ...env,
+      HOME: home,
+      PATH: `${bin}${path.delimiter}${env.PATH}`,
+      WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "2",
+    };
+    service("start");
+    serviceRunning = true;
+
+    const cancelled = await launchInlineRun(
+      {
+        mode: "codex",
+        marker: JSON.stringify({ mode: "hang", dir: cancelledDir }),
+        gate: path.join(cancelledDir, "successor"),
+      },
+      ports.service,
+      db,
+    );
+    const cancelledPids = await agentPids(cancelledDir);
+    const survivor = await launchInlineRun(
+      {
+        mode: "codex",
+        marker: JSON.stringify({ mode: "finish", dir: survivorDir }),
+        gate: path.join(survivorDir, "successor"),
+      },
+      ports.service,
+      db,
+    );
+    const survivorPids = await agentPids(survivorDir);
+
+    cancel(cancelled.runId);
+    const cancelledAt = Date.now();
+    await until(
+      () => !cancelledPids.some(alive),
+      "the cancelled run's Codex launcher, app server or child outlived the 5s budget",
+      PI_STOP_BUDGET_MS,
+    );
+    const stopMs = Date.now() - cancelledAt;
+    cancel(cancelled.runId);
+    await assertCancelled(cancelled.runId, ports.service);
+    assert.ok(survivorPids.every(alive), "stopping one run's Codex reached another run's Codex");
+    await until(
+      async () => (await jobsFor(db, cancelled.runId)).length === 0,
+      "the cancelled Codex run's deliveries did not drain",
+    );
+
+    appendFileSync(path.join(survivorDir, "release"), "release\n");
+    await until(
+      async () => (await runtimeRun(survivor.runId, ports.service)).status === "completed",
+      "the other Codex run did not complete after the cancellation",
+    );
+    // The supervisor stops the group after the step closes the provider.
+    await until(
+      () => !survivorPids.some(alive),
+      "the finished Codex launcher, app server or child outlived its step",
+      PI_STOP_BUDGET_MS,
+    );
+    assert.deepEqual(lines(path.join(survivorDir, "successor")), ["codex-successor"]);
+
+    await new Promise((resolve) => setTimeout(resolve, DRAIN_MS * 2));
+    assert.deepEqual(
+      lines(path.join(cancelledDir, "launches")),
+      ["launch"],
+      "Codex was relaunched",
+    );
+    assert.deepEqual(lines(path.join(cancelledDir, "successor")), []);
+    const timeline = await runtimeTimeline(cancelled.runId, ports.service);
+    const agentSteps = timeline.steps.filter((step) => /agent/i.test(step.name));
+    assert.equal(agentSteps.length, 1, JSON.stringify(timeline.steps));
+    assert.equal(agentSteps[0].status, "failed");
+    assert.equal(agentSteps[0].attempt, 1);
+    assert.match(
+      serviceLogs(dataHome),
+      new RegExp(
+        `RunCancelledError: run ${cancelled.runId} was cancelled, so jigs stopped its agent`,
+      ),
+    );
+    await Promise.all([cancelled.completion, survivor.completion]);
+
+    service("stop");
+    serviceRunning = false;
+    serviceEnv = env;
+    console.log(
+      `cancellation matrix: CLI cancel stopped a real Codex driver's launcher, app server and child in ${stopMs}ms; the agent step failed once with no retry or successor, and another Codex run finished`,
+    );
+  }
+
   function service(action) {
-    const result = runCli(["service", action], env, {
+    const result = runCli(["service", action], serviceEnv, {
       allowFailure: true,
       timeout: SERVICE_TIMEOUT_MS,
     });

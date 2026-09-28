@@ -73,13 +73,20 @@ export function createCodexDriver(
   deps: CodexDriverDependencies = defaultDependencies,
 ): Driver<"codex"> {
   // Each step gets its own app server and private home; closing the model
-  // stops the one and removes the other.
+  // stops the one and removes the other. The launcher's supervisor stops the
+  // app server's process group, MCP servers included, once the provider's
+  // close signals it, so cancellation closes the provider at once.
   async function open(target: HarnessTarget, context: OpenContext): Promise<OpenedModel> {
     const harness = descriptor(target);
     const { resume } = target;
-    const prepared = await deps.prepareCodexHome(context.metadata.workflowRunId);
+    context.signal.throwIfAborted();
+    const runId = context.metadata.workflowRunId;
+    const prepared = await deps.prepareCodexHome(runId);
     let provider: CodexAppServerProvider | undefined;
+    const onAbort = () => void provider?.close().catch(() => {});
+    context.signal.addEventListener("abort", onAbort, { once: true });
     const close = async () => {
+      context.signal.removeEventListener("abort", onAbort);
       try {
         await provider?.close();
       } finally {
@@ -87,6 +94,8 @@ export function createCodexDriver(
       }
     };
     try {
+      // The listener above cannot see an abort that landed while the home was prepared.
+      context.signal.throwIfAborted();
       if (resume !== undefined && deps.sessionFile(prepared.sessionDir, resume.id) === undefined) {
         throw new AgentSessionError(
           `Codex session ${resume.id} is missing from ${prepared.sessionDir}`,

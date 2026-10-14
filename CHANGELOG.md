@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.104.8](https://github.com/salimhamed/jigs/compare/jigs-v0.104.7...jigs-v0.104.8) (2026-10-14)
+
+
+### Features
+
+* **hub:** complete GitHub App setup help and reveal secrets ([#681](https://github.com/salimhamed/jigs/issues/681)) ([8343355](https://github.com/salimhamed/jigs/commit/8343355225156055e528d6b05c5ec5b80cb9328d))
+
+## [0.104.7](https://github.com/salimhamed/jigs/compare/jigs-v0.104.6...jigs-v0.104.7) (2026-10-14)
+
+
+### Features
+
+* start runs from GitHub releases ([#678](https://github.com/salimhamed/jigs/issues/678)) ([a22e969](https://github.com/salimhamed/jigs/commit/a22e96987f4f59b6c79e404e06d17399acac4aad))
+
+## [0.104.6](https://github.com/salimhamed/jigs/compare/jigs-v0.104.5...jigs-v0.104.6) (2026-10-14)
+
+
+### Features
+
+* **hub:** invite links last 7 days ([#676](https://github.com/salimhamed/jigs/issues/676)) ([fa605bd](https://github.com/salimhamed/jigs/commit/fa605bd24df0d98a2d3f1a2315d526d580e7f4e2))
+
+## [0.104.5](https://github.com/salimhamed/jigs/compare/jigs-v0.104.4...jigs-v0.104.5) (2026-10-12)
+
+
+### Features
+
+* **hub:** add a favicon ([#674](https://github.com/salimhamed/jigs/issues/674)) ([1b9c187](https://github.com/salimhamed/jigs/commit/1b9c1878953f9e255c3a2b7177c0974f47372a10))
+
 ## [0.104.4](https://github.com/salimhamed/jigs/compare/jigs-v0.104.3...jigs-v0.104.4) (2026-10-12)
 
 

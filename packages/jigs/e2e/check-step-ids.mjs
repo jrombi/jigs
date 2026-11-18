@@ -356,6 +356,39 @@ function workflowBundle() {
   return lines.slice(start, end).join("\n");
 }
 
+// The bundler heads each module it concatenates with a `// <path>` line. The
+// code before the first header is the runtime preamble and any hoisted import.
+function workflowBundleModules() {
+  const modules = [{ path: "(preamble)", lines: [] }];
+  for (const line of workflowBundle().split("\n")) {
+    const header = /^\/\/ (\S+\.(?:[cm]?[jt]sx?|json))$/.exec(line);
+    if (header) modules.push({ path: header[1], lines: [] });
+    else modules.at(-1).lines.push(line);
+  }
+  return modules;
+}
+
+// The SDK's builder imports every package the steps reach that registers a
+// serialization class (AI SDK providers, for one) into the workflow half too,
+// so a model handed across the step boundary deserializes on both sides.
+// Those packages' lazily guarded `node:` loads are the SDK's to keep out of
+// the sandbox; what jigs guards is that none of its own code, or the
+// factory's, crosses.
+function isJigsOrFactoryModule(modulePath) {
+  return !modulePath.includes("node_modules/") || modulePath.includes("/@jigs-ai/jigs/");
+}
+
+function builtinSpecifiersIn(module) {
+  const specifiers = new Set(module.lines.join("\n").match(/"node:[a-z/]+"/g) ?? []);
+  return [...specifiers].map((specifier) => `${specifier} in ${module.path}`);
+}
+
+function envReadsIn(module) {
+  return module.lines
+    .filter((line) => line.includes("process.env"))
+    .map((line) => `${line.trim()} in ${module.path}`);
+}
+
 function withFakeVersion(packJigs) {
   const original = readFileSync(jigsPackage, "utf8");
   const { version } = JSON.parse(original);
@@ -984,7 +1017,8 @@ async function checkScaffold(name) {
     );
   }
 
-  const leaked = [...new Set(workflowBundle().match(/"node:[a-z/]+"/g) ?? [])];
+  const ownModules = workflowBundleModules().filter((module) => isJigsOrFactoryModule(module.path));
+  const leaked = ownModules.flatMap(builtinSpecifiersIn);
   if (leaked.length > 0) {
     for (const builtin of leaked) console.error(`  ${builtin}`);
     fail(
@@ -994,11 +1028,8 @@ async function checkScaffold(name) {
   }
 
   // The other half of the same property: workflow code cannot read the
-  // environment either. Reported with line context because, unlike a `"node:fs"`
-  // specifier, a bare `process.env` says nothing about which module it came from.
-  const envReads = workflowBundle()
-    .split("\n")
-    .filter((line) => line.includes("process.env"));
+  // environment either.
+  const envReads = ownModules.flatMap(envReadsIn);
   if (envReads.length > 0) {
     for (const line of envReads.slice(0, 5)) console.error(`  ${line.trim()}`);
     fail(

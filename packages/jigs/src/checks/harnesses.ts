@@ -39,7 +39,10 @@ function checksFor(descriptor: Descriptor): Check[] {
   const driver = driverFor(descriptor.kind);
   let planned: Check[];
   try {
-    planned = driver.descriptorChecks(descriptor);
+    planned = [
+      ...(driver.credentialChecks?.(descriptor) ?? []),
+      ...driver.descriptorChecks(descriptor),
+    ];
   } catch (err) {
     planned = [
       failedCheck(

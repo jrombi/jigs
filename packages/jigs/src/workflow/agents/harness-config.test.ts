@@ -287,6 +287,35 @@ test("a descriptor holds only the SDK's or provider's data settings outside the 
   expect(functionsRejected).toHaveLength(6);
 });
 
+test("a Claude credential is plain data, checked when the harness is built", () => {
+  expect(harnesses.claude({ model: "opus", credential: { kind: "api-key" } })).toEqual({
+    kind: "claude",
+    model: "opus",
+    credential: { kind: "api-key" },
+  });
+  expect(
+    harnesses.claude({ model: "opus", credential: { kind: "api-key", apiKeyEnv: "TEAM_KEY" } }),
+  ).toEqual({
+    kind: "claude",
+    model: "opus",
+    credential: { kind: "api-key", apiKeyEnv: "TEAM_KEY" },
+  });
+  expect(harnesses.claude({ model: "opus", credential: { kind: "bedrock" } })).toEqual({
+    kind: "claude",
+    model: "opus",
+    credential: { kind: "bedrock" },
+  });
+  const built = (credential: unknown) => () =>
+    harnesses.claude({ model: "opus", credential: credential as never });
+  expect(built({ kind: "oauth" })).toThrow(JigsError);
+  expect(built({ kind: "oauth" })).toThrow("Claude harness credential is invalid");
+  expect(built({ kind: "api-key", apiKeyEnv: "sk-ant-literal-key" })).toThrow(
+    "must be an environment variable name, never a value",
+  );
+  expect(built({ kind: "bedrock", apiKeyEnv: "X" })).toThrow("Unrecognized key");
+  expect(built("api-key")).toThrow(JigsError);
+});
+
 test("every harness takes skill folder paths as plain data", () => {
   const skills = ["skills/snowflake", "/opt/skills/pdf"];
   expect(harnesses.claude({ model: "opus", skills })).toEqual({

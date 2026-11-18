@@ -196,6 +196,8 @@ test("agent environment names default to none and must be names, not values", ()
 test.each([
   "ANTHROPIC_API_KEY",
   "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "AWS_BEARER_TOKEN_BEDROCK",
   "OPENAI_API_KEY",
   "OPENROUTER_API_KEY",
   "CODEX_HOME",

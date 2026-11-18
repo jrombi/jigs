@@ -21,7 +21,9 @@ person can judge.
   subscription and on the `PATH` of whatever starts the service:
   Claude Code (`claude auth login`), Codex (`codex login`), Pi (`pi`, then
   `/login`). `JIGS_CLAUDE_EXECUTABLE` can point at a `claude` that is not on
-  `PATH`. A bare factory needs none of them.
+  `PATH`. A Claude harness whose `credential` is `api-key` or `bedrock` needs
+  no login, only `ANTHROPIC_API_KEY` or AWS credentials in the environment.
+  A bare factory needs none of them.
 - The AWS CLI, only if a workflow declares `aws: true`.
 
 jigs is on public npm as `@jigs-ai/jigs`, pinned by the factory to a version.

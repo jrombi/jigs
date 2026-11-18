@@ -39,7 +39,8 @@ import type {
   ExecutorGeneration,
   RunRequest,
 } from "../shared/types.ts";
-import { claudeAuthCheck } from "./checks.ts";
+import { claudeCredentialCheck } from "./checks.ts";
+import { claudeCredentialEnv, claudeCredentialVariables } from "./credential.ts";
 import { claudeGeneration, claudeStreamParts, resultOutcome } from "./messages.ts";
 import { CLAUDE_ENV, type ClaudeProcessSpawner, claudeStepSettings } from "./process.ts";
 import { accepting, startTurn, step, type TurnAction, type TurnInput } from "./turn-state.ts";
@@ -137,7 +138,7 @@ function workSettings(
     ...(disallowed === undefined ? {} : { disallowedTools: disallowed }),
     model: harness.model,
     cwd,
-    env: context.env,
+    env: claudeCredentialEnv(harness.credential, context.env),
     ...(context.signal === undefined ? {} : { signal: context.signal }),
     owner: owner(context.metadata),
     strictMcpConfig: true,
@@ -295,7 +296,7 @@ export function createClaudeDriver(
       strictMcpConfig: true,
       mcpServers: {},
       settingSources: [],
-      env: context.env,
+      env: claudeCredentialEnv(harness.credential, context.env),
       ...(context.signal === undefined ? {} : { signal: context.signal }),
       owner: owner(context.metadata),
       ...outputFormat(request.outputSchema),
@@ -438,12 +439,16 @@ export function createClaudeDriver(
     ask,
     run,
     converse,
-    installationChecks: () => [harnessRuntimeCheck(cli), claudeAuthCheck()],
+    installationChecks: () => [harnessRuntimeCheck(cli)],
+    credentialChecks: (harness) => [claudeCredentialCheck(harness.credential)],
     descriptorChecks: () => [],
     envAllowlist: (request) => [
       ...CLAUDE_ENV,
       ...("harness" in request && request.harness.kind === "claude"
-        ? mcpCredentialVariables(request.harness.mcpServers ?? {})
+        ? [
+            ...claudeCredentialVariables(request.harness.credential),
+            ...mcpCredentialVariables(request.harness.mcpServers ?? {}),
+          ]
         : []),
     ],
     sessionPointer: { providerKey: "claude", field: "sessionId" },

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { makeTmpDir, removeTmpDir, testFactoryContext } from "../test-fixtures.ts";
 import { defineFactory } from "../workflow/factory.ts";
 import { parseFactoryConfig } from "../workflow/factory-schema.ts";
@@ -12,6 +12,7 @@ import { resolveFactoryContext } from "./factory-context.ts";
 
 const roots: string[] = [];
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) removeTmpDir(root);
 });
 function factory(source: string) {
@@ -191,6 +192,51 @@ test("agent environment names default to none and must be names, not values", ()
       workflows: {},
     }),
   ).toThrow("agents.env.0");
+});
+
+test("the factory's default Claude credential is none unless jigs.config.ts sets one", () => {
+  const hub = { url: "https://hub.example.test" };
+  expect(parseFactoryConfig({ hub }).harnesses).toEqual({ claude: {} });
+  expect(
+    parseFactoryConfig({
+      hub,
+      harnesses: { claude: { credential: { kind: "api-key", apiKeyEnv: "TEAM_KEY" } } },
+    }).harnesses.claude.credential,
+  ).toEqual({ kind: "api-key", apiKeyEnv: "TEAM_KEY" });
+});
+
+test("jigs.config.ts picks the default Claude credential from the copy's environment when it loads", () => {
+  const perCopy = `export default {
+  hub: { url: "https://hub.example.test" },
+  harnesses: {
+    claude: { credential: process.env.JIGS_TEST_HOSTED ? { kind: "api-key" } : undefined },
+  },
+  workflows: {},
+};
+`;
+  vi.stubEnv("JIGS_TEST_HOSTED", "1");
+  expect(readFactoryConfig(factory(perCopy)).harnesses.claude.credential).toEqual({
+    kind: "api-key",
+  });
+  vi.stubEnv("JIGS_TEST_HOSTED", undefined);
+  expect(readFactoryConfig(factory(perCopy)).harnesses.claude.credential).toBeUndefined();
+});
+
+test.each([
+  [{ kind: "oauth" }, 'harnesses.claude.credential.kind: must be { kind: "api-key", apiKeyEnv? }'],
+  [{ kind: "api-key", apiKeyEnv: "sk-ant-123" }, "harnesses.claude.credential.apiKeyEnv: must be"],
+  [
+    { kind: "bedrock", region: "us-east-1" },
+    'harnesses.claude.credential: Unrecognized key: "region"',
+  ],
+])("an invalid default Claude credential %j is rejected where it is set", (credential, field) => {
+  const definition = {
+    hub: { url: "https://hub.example.test" },
+    harnesses: { claude: { credential } },
+    workflows: {},
+  };
+  expect(() => parseFactoryConfig(definition)).toThrow(field);
+  expect(() => defineFactory(definition as never)).toThrow(field);
 });
 
 test.each([

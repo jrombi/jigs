@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { inTestFactory } from "../../../test-fixtures.ts";
 import type { ConversationMessage, TurnRequest } from "../../../workflow/agents/conversation.ts";
 import { harnesses } from "../../../workflow/agents/harness-config.ts";
 import { liveTurn, registerLiveTurn } from "../shared/live-turns.ts";
@@ -6,6 +7,8 @@ import type { TurnEvent } from "../shared/types.ts";
 import { conversationSessionId, createClaudeDriver } from "./driver.ts";
 import { deferred, type FakeClaudeCli, fakeClaudeCli } from "./test-fixtures.ts";
 import { RESTART_NOTE } from "./turn-state.ts";
+
+inTestFactory();
 
 beforeEach(() => {
   vi.stubEnv("JIGS_CLAUDE_EXECUTABLE", "/fake/claude");

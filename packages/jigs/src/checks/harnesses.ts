@@ -1,3 +1,4 @@
+import type { FactoryContext } from "../config/factory-context.ts";
 import { JigsError } from "../errors.ts";
 import { driverFor } from "../steps/agents/shared/drivers.ts";
 import {
@@ -35,12 +36,12 @@ export function harnessUsers(workflows: WorkflowManifests): Map<HarnessKind, str
 type Descriptor = Harness | AskableModelSource;
 
 // A descriptor its driver cannot plan fails as one check, the way the step would.
-function checksFor(descriptor: Descriptor): Check[] {
+function checksFor(descriptor: Descriptor, ctx: FactoryContext): Check[] {
   const driver = driverFor(descriptor.kind);
   let planned: Check[];
   try {
     planned = [
-      ...(driver.credentialChecks?.(descriptor) ?? []),
+      ...(driver.credentialChecks?.(descriptor, ctx) ?? []),
       ...driver.descriptorChecks(descriptor),
     ];
   } catch (err) {
@@ -59,9 +60,9 @@ function checksFor(descriptor: Descriptor): Check[] {
 }
 
 /** The installation and descriptor checks of every harness and model source, each check id once. */
-export function descriptorChecks(descriptors: readonly Descriptor[]): Check[] {
+export function descriptorChecks(descriptors: readonly Descriptor[], ctx: FactoryContext): Check[] {
   const checks = new Map<string, Check>();
-  for (const check of descriptors.flatMap(checksFor))
+  for (const check of descriptors.flatMap((descriptor) => checksFor(descriptor, ctx)))
     if (!checks.has(check.id)) checks.set(check.id, check);
   return [...checks.values()];
 }
@@ -72,10 +73,10 @@ export function requiredDescriptors(requires: WorkflowRequires): Descriptor[] {
 }
 
 /** The checks of every declared agent and model source, each failure naming the workflows that need it. */
-export function usedDescriptorChecks(workflows: WorkflowManifests): Check[] {
+export function usedDescriptorChecks(workflows: WorkflowManifests, ctx: FactoryContext): Check[] {
   const users = new Map<string, { check: Check; workflows: string[] }>();
   for (const [workflow, { requires }] of Object.entries(workflows)) {
-    for (const check of descriptorChecks(requiredDescriptors(requires ?? {}))) {
+    for (const check of descriptorChecks(requiredDescriptors(requires ?? {}), ctx)) {
       const entry = users.get(check.id) ?? { check, workflows: [] };
       entry.workflows.push(workflow);
       users.set(check.id, entry);

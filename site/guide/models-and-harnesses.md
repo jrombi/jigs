@@ -288,8 +288,25 @@ Preflight and `jigs doctor` fail when none of the credential sources is set;
 they do not call Bedrock, so a key without access to the model fails on the
 agent's first call. The model is Bedrock's model ID.
 
+Workflow code cannot read the environment, so one workflow cannot pick the
+subscription login on a laptop and an API key on a server. Leave `credential`
+out of the harness and set a factory-wide default in `jigs.config.ts`, which
+can read each copy's environment:
+
+```ts factory-options
+// Inside defineFactory({ ... }) in jigs.config.ts
+harnesses: {
+  claude: { credential: process.env.ANTHROPIC_API_KEY ? { kind: "api-key" } : undefined },
+},
+```
+
+A Claude harness runs on its own `credential` when it sets one, else on the
+factory's default, else on the subscription login. Preflight and `jigs doctor`
+check the one it runs on. See [`harnesses`](/guide/configuration#harnesses).
+
 Credentials never go in workflow code or in [`agents.env`](/guide/configuration#agents-env):
-`credential` is the one place that hands Claude Code a key.
+`credential`, on the harness or as the factory's default, is the one place that
+hands Claude Code a key.
 
 ## Codex
 

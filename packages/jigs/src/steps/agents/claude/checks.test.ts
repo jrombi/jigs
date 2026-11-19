@@ -1,5 +1,8 @@
 import { expect, test } from "vitest";
 import type { CheckResult } from "../../../checks/check.ts";
+import { doctorChecks, preflightChecks } from "../../../checks/index.ts";
+import { testFactoryContext } from "../../../test-fixtures.ts";
+import { type ClaudeCredential, harnesses } from "../../../workflow/agents/harness-config.ts";
 import { claudeCredentialCheck } from "./checks.ts";
 
 // Verbatim `claude auth status --json` output (2.1.326) with ANTHROPIC_API_KEY
@@ -195,4 +198,46 @@ test("every credential mode fails closed on output that is not JSON", async () =
       reason: expect.stringContaining("did not answer JSON"),
     });
   }
+});
+
+// Preflight and doctor plan the check for the credential the step will run on.
+const claudeCheckIds = (harness: ClaudeCredential | undefined, factory?: ClaudeCredential) => {
+  const agents = {
+    builder: harnesses.claude({
+      model: "opus",
+      ...(harness === undefined ? {} : { credential: harness }),
+    }),
+  };
+  const ctx = testFactoryContext({
+    config: factory === undefined ? {} : { harnesses: { claude: { credential: factory } } },
+  });
+  const claudeIds = (checks: { id: string }[]) =>
+    checks
+      .map((check) => check.id)
+      .filter((id) => id.startsWith("harness.claude-") && id !== "harness.claude-cli");
+  return {
+    preflight: claudeIds(preflightChecks({ agents }, undefined, ctx)),
+    doctor: claudeIds(doctorChecks({ build: { requires: { agents } } }, {}, ctx)),
+  };
+};
+
+test("preflight and doctor check the factory's default credential for a harness without its own", () => {
+  const ids = ["harness.claude-api-key-team-key"];
+  expect(claudeCheckIds(undefined, { kind: "api-key", apiKeyEnv: "TEAM_KEY" })).toEqual({
+    preflight: ids,
+    doctor: ids,
+  });
+});
+
+test("preflight and doctor check the harness's own credential over the factory's default", () => {
+  const ids = ["harness.claude-bedrock"];
+  expect(claudeCheckIds({ kind: "bedrock" }, { kind: "api-key" })).toEqual({
+    preflight: ids,
+    doctor: ids,
+  });
+});
+
+test("preflight and doctor check the subscription login without any credential", () => {
+  const ids = ["harness.claude-auth"];
+  expect(claudeCheckIds(undefined)).toEqual({ preflight: ids, doctor: ids });
 });

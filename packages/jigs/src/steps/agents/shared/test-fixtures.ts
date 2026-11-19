@@ -5,6 +5,8 @@ import path from "node:path";
 import { type CodexAppServerProvider, createCodexAppServer } from "ai-sdk-provider-codex-cli";
 import semver from "semver";
 import type { RunStatusReader } from "../../../run-cancellation.ts";
+import { createClaudeDriver } from "../claude/driver.ts";
+import { type DriverResolver, driverFor } from "./drivers.ts";
 import { MIN_PI_VERSION, resolvePiExecutable } from "./executables.ts";
 import { type ExecutionSeams, executionSeams } from "./seams.ts";
 
@@ -48,10 +50,14 @@ export function cancellableRun(initial = "running"): RunStatusReader & { cancel(
 }
 
 // Tests run outside any factory, so there is no jigs.config.ts declaring
-// agent variables to read.
+// agent variables or a default Claude credential to read.
+const factorylessClaude = createClaudeDriver({ factoryCredential: () => undefined });
+
 export const factorylessDeps: ExecutionSeams = {
   ...executionSeams,
   factoryEnv: () => [],
+  resolveDriver: ((kind) =>
+    kind === "claude" ? factorylessClaude : driverFor(kind)) as DriverResolver,
   runStatus: runningRunStatus,
 };
 

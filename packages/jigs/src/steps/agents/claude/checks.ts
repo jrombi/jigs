@@ -114,7 +114,7 @@ function subscriptionResult(status: ClaudeAuthStatus): CheckResult {
     return {
       ok: false,
       reason: `the Claude Code CLI is using an API key from ${String(status.apiKeySource)} instead of the subscription login`,
-      repair: `remove ${String(status.apiKeySource)} from ${FACTORY_ENVIRONMENT} (and from the shell you start the service from), or declare \`credential: { kind: "api-key" }\` on the harness, then: \`${RESTART_SERVICE}\``,
+      repair: `remove ${String(status.apiKeySource)} from ${FACTORY_ENVIRONMENT} (and from the shell you start the service from), or set \`credential: { kind: "api-key" }\` on the harness or under harnesses.claude in jigs.config.ts, then: \`${RESTART_SERVICE}\``,
     };
   }
   if (status.authMethod !== "claude.ai") {

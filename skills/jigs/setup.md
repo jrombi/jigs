@@ -23,6 +23,9 @@ person can judge.
   `/login`). `JIGS_CLAUDE_EXECUTABLE` can point at a `claude` that is not on
   `PATH`. A Claude harness whose `credential` is `api-key` or `bedrock` needs
   no login, only `ANTHROPIC_API_KEY` or AWS credentials in the environment.
+  `harnesses.claude.credential` in `jigs.config.ts` sets that default for every
+  Claude harness without its own, per copy from its environment, such as an
+  API key on a server and the subscription login on a laptop.
   A bare factory needs none of them.
 - The AWS CLI, only if a workflow declares `aws: true`.
 

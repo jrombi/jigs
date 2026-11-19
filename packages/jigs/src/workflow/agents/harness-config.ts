@@ -275,7 +275,9 @@ export type ClaudeBedrockCredential = { kind: "bedrock" };
  * How Claude Code pays for its calls when not through a claude.ai subscription login.
  *
  * @remarks
- * Leave it out to use the account `claude auth login` signed in, which is the default. Workflow
+ * A harness without one uses the factory's default, `harnesses.claude.credential` in
+ * `jigs.config.ts`, and without that the account `claude auth login` signed in. Set the default
+ * there to choose per copy from its environment, since workflow code cannot read it. Workflow
  * code never holds a key: `api-key` names the variable the step reads when the agent starts, and
  * `bedrock` passes the AWS variables the service has through to the agent.
  *
@@ -302,7 +304,7 @@ export type ClaudeHarness = JsonOnly<Omit<ClaudeAgentOptions, ClaudePolicyKey>> 
   HarnessSkills & {
     kind: "claude";
     model: string;
-    /** An API key or Bedrock instead of the subscription login. */
+    /** An API key or Bedrock; left out, the factory's default or the subscription login. */
     credential?: ClaudeCredential;
     mcpServers?: Record<string, McpServerConfig>;
     /** Acts on GitHub as the factory's App, through this installation. */

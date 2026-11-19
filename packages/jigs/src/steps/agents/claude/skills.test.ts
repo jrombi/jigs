@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { inTestFactory } from "../../../test-fixtures.ts";
 import { harnesses } from "../../../workflow/agents/harness-config.ts";
 import { buildAgentRequest, buildAskAgentRequest } from "../../../workflow/agents/plan.ts";
 import { prepareClaudeSkillsPlugin } from "../shared/skills.ts";
@@ -8,6 +9,8 @@ import { makeTmpDir, removeTmpDir } from "../shared/test-fixtures.ts";
 import type { RunRequest } from "../shared/types.ts";
 import { createClaudeDriver } from "./driver.ts";
 import { claudeResult, fakeClaudeQuery } from "./test-fixtures.ts";
+
+inTestFactory();
 
 const registry = vi.hoisted(() => ({ recordRunDirectory: vi.fn(async () => {}) }));
 vi.mock("../../runtime/registry.ts", () => registry);

@@ -2,6 +2,7 @@
 // workflow bundle, and the CLI and service parse `jigs.config.ts` with it.
 
 import { z } from "zod";
+import { claudeCredentialSchema } from "./agents/claude-credential.ts";
 import { JigsError } from "./errors.ts";
 import type { EventTrigger, Schedule, WorkflowDefinition } from "./factory.ts";
 import { parseGithubRemote } from "./github-remote.ts";
@@ -45,6 +46,12 @@ export const agentsSchema = z.strictObject({
    * its model source instead.
    */
   env: z.array(envName).default([]),
+});
+
+// Defaults for the harness descriptors workflows build. The factory sets them per copy from its
+// environment, which workflow code cannot read; a descriptor's own setting wins over them.
+export const harnessesSchema = z.strictObject({
+  claude: z.strictObject({ credential: claudeCredentialSchema.optional() }).prefault({}),
 });
 
 /**
@@ -136,6 +143,7 @@ export const factoryConfigSchema = z
     release: releaseSchema.optional(),
     // Service variables every agent harness receives beyond jigs' base set.
     agents: agentsSchema.prefault({}),
+    harnesses: harnessesSchema.prefault({}),
     // Deferred imports: calling one loads the workflow, which only the service does.
     workflows: z
       .record(

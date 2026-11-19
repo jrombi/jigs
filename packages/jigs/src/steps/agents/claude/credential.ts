@@ -1,4 +1,5 @@
-import type { ClaudeCredential } from "../../../workflow/agents/harness-config.ts";
+import { currentFactoryContext, type FactoryContext } from "../../../config/factory-context.ts";
+import type { ClaudeCredential, ClaudeHarness } from "../../../workflow/agents/harness-config.ts";
 
 /** Where the Claude Agent SDK reads an Anthropic API key. */
 export const ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY";
@@ -35,6 +36,25 @@ export const BEDROCK_ENV: readonly string[] = [
   ...BEDROCK_CREDENTIAL_SOURCE_ENV,
   ...BEDROCK_SUPPORTING_ENV,
 ];
+
+/** The factory-wide default credential: `harnesses.claude.credential` in `jigs.config.ts`. */
+export function factoryClaudeCredential(
+  ctx: FactoryContext = currentFactoryContext(),
+): ClaudeCredential | undefined {
+  return ctx.config.harnesses.claude.credential;
+}
+
+/**
+ * The credential a Claude harness runs on: its descriptor's own, else the factory's default. None
+ * is the subscription login. The descriptor never changes, so neither do the run's step inputs.
+ */
+// The default is read only when needed, so a descriptor with its own credential needs no factory.
+export function claudeCredentialFor(
+  harness: ClaudeHarness,
+  factoryDefault: () => ClaudeCredential | undefined,
+): ClaudeCredential | undefined {
+  return harness.credential ?? factoryDefault();
+}
 
 /** The service variable an `api-key` credential reads. */
 export function claudeApiKeyVariable(credential: ClaudeCredential & { kind: "api-key" }): string {

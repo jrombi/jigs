@@ -133,6 +133,7 @@ export {
   type Factory,
   type FactoryDefinition,
   type GitHubDefinition,
+  type HarnessesDefinition,
   type LinearDefinition,
   type Schedule,
   type SourceDescriptor,

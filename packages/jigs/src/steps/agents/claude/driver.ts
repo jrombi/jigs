@@ -12,6 +12,7 @@ import {
 import { JigsError } from "../../../errors.ts";
 import type { TurnRequest, TurnResult } from "../../../workflow/agents/conversation.ts";
 import {
+  type ClaudeCredential,
   type ClaudeHarness,
   claudePolicyKeys,
   type McpServerConfig,
@@ -40,7 +41,12 @@ import type {
   RunRequest,
 } from "../shared/types.ts";
 import { claudeCredentialCheck } from "./checks.ts";
-import { claudeCredentialEnv, claudeCredentialVariables } from "./credential.ts";
+import {
+  claudeCredentialEnv,
+  claudeCredentialFor,
+  claudeCredentialVariables,
+  factoryClaudeCredential,
+} from "./credential.ts";
 import { claudeGeneration, claudeStreamParts, resultOutcome } from "./messages.ts";
 import { CLAUDE_ENV, type ClaudeProcessSpawner, claudeStepSettings } from "./process.ts";
 import { accepting, startTurn, step, type TurnAction, type TurnInput } from "./turn-state.ts";
@@ -95,6 +101,8 @@ export interface ClaudeDriverDependencies {
   discardSession(sessionId: string, cwd: string): Promise<void>;
   prepareSkillsPlugin(runId: string, skills: readonly string[]): Promise<SkillsPlugin>;
   openStepStream(): StepStream | undefined;
+  /** The factory-wide default credential, for a harness that sets none. */
+  factoryCredential(): ClaudeCredential | undefined;
 }
 
 const defaultDependencies: ClaudeDriverDependencies = {
@@ -112,6 +120,7 @@ const defaultDependencies: ClaudeDriverDependencies = {
     return prepareClaudeSkillsPlugin(runId, skills);
   },
   openStepStream,
+  factoryCredential: () => factoryClaudeCredential(),
 };
 
 const cli: HarnessCli<"claude"> = {
@@ -127,6 +136,7 @@ function outputFormat(schema: Record<string, unknown> | undefined): Pick<Options
 // What `run` and `converse` share: the descriptor's policy, the worktree, MCP and skills.
 function workSettings(
   harness: ClaudeHarness,
+  credential: ClaudeCredential | undefined,
   cwd: string,
   context: DriverContext,
   plugin: SkillsPlugin | undefined,
@@ -138,7 +148,7 @@ function workSettings(
     ...(disallowed === undefined ? {} : { disallowedTools: disallowed }),
     model: harness.model,
     cwd,
-    env: claudeCredentialEnv(harness.credential, context.env),
+    env: claudeCredentialEnv(credential, context.env),
     ...(context.signal === undefined ? {} : { signal: context.signal }),
     owner: owner(context.metadata),
     strictMcpConfig: true,
@@ -218,6 +228,8 @@ export function createClaudeDriver(
   overrides: Partial<ClaudeDriverDependencies> = {},
 ): Driver<"claude"> {
   const deps = { ...defaultDependencies, ...overrides };
+  const credentialOf = (harness: ClaudeHarness) =>
+    claudeCredentialFor(harness, deps.factoryCredential);
 
   // Reads up to the result: in a one-shot query Claude Code ends its turn there, and leaving the
   // loop closes the query.
@@ -258,7 +270,7 @@ export function createClaudeDriver(
         ? undefined
         : createStreamTap(stream, { harness: "claude", cwd, resume: resume !== undefined });
     try {
-      const settings = workSettings(harness, cwd, context, plugin, {
+      const settings = workSettings(harness, credentialOf(harness), cwd, context, plugin, {
         ...(resume === undefined ? {} : { resume: resume.id }),
         ...outputFormat(request.outputSchema),
       });
@@ -296,7 +308,7 @@ export function createClaudeDriver(
       strictMcpConfig: true,
       mcpServers: {},
       settingSources: [],
-      env: claudeCredentialEnv(harness.credential, context.env),
+      env: claudeCredentialEnv(credentialOf(harness), context.env),
       ...(context.signal === undefined ? {} : { signal: context.signal }),
       owner: owner(context.metadata),
       ...outputFormat(request.outputSchema),
@@ -355,6 +367,7 @@ export function createClaudeDriver(
         case "launch":
           settings = workSettings(
             harness,
+            credentialOf(harness),
             cwd,
             context,
             plugin,
@@ -440,13 +453,15 @@ export function createClaudeDriver(
     run,
     converse,
     installationChecks: () => [harnessRuntimeCheck(cli)],
-    credentialChecks: (harness) => [claudeCredentialCheck(harness.credential)],
+    credentialChecks: (harness, ctx) => [
+      claudeCredentialCheck(claudeCredentialFor(harness, () => factoryClaudeCredential(ctx))),
+    ],
     descriptorChecks: () => [],
     envAllowlist: (request) => [
       ...CLAUDE_ENV,
       ...("harness" in request && request.harness.kind === "claude"
         ? [
-            ...claudeCredentialVariables(request.harness.credential),
+            ...claudeCredentialVariables(credentialOf(request.harness)),
             ...mcpCredentialVariables(request.harness.mcpServers ?? {}),
           ]
         : []),

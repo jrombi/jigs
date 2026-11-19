@@ -6,10 +6,15 @@ const envName = z
   .string()
   .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an environment variable name, never a value");
 
-const claudeCredentialSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("api-key"), apiKeyEnv: envName.optional() }),
-  z.strictObject({ kind: z.literal("bedrock") }),
-]) satisfies z.ZodType<ClaudeCredential>;
+// Shared by the harness option and the factory-wide default in jigs.config.ts.
+export const claudeCredentialSchema = z.discriminatedUnion(
+  "kind",
+  [
+    z.strictObject({ kind: z.literal("api-key"), apiKeyEnv: envName.optional() }),
+    z.strictObject({ kind: z.literal("bedrock") }),
+  ],
+  { error: 'must be { kind: "api-key", apiKeyEnv? } or { kind: "bedrock" }' },
+) satisfies z.ZodType<ClaudeCredential>;
 
 /** Reject a Claude credential the drivers cannot forward, when the workflow module loads. */
 export function assertClaudeCredential(credential: unknown): void {
@@ -23,6 +28,6 @@ export function assertClaudeCredential(credential: unknown): void {
     .join("; ");
   throw new JigsError(
     `Claude harness credential is invalid: ${problems}`,
-    'use { kind: "api-key", apiKeyEnv? } or { kind: "bedrock" }, or leave credential out for the subscription login',
+    'use { kind: "api-key", apiKeyEnv? } or { kind: "bedrock" }, or leave credential out for the factory\'s default',
   );
 }

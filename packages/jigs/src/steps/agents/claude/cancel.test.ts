@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { FatalError } from "workflow";
 import { RunCancelledError } from "../../../run-cancellation.ts";
+import { inTestFactory } from "../../../test-fixtures.ts";
 import { harnesses } from "../../../workflow/agents/harness-config.ts";
 import { buildAgentRequest, buildAskAgentRequest } from "../../../workflow/agents/plan.ts";
 import { executeAgentWith } from "../shared/execute-agent.ts";
@@ -10,6 +11,8 @@ import { isTrackedProcessGroup } from "../shared/process-group.ts";
 import { executionSeams } from "../shared/seams.ts";
 import { cancellableRun, makeTmpDir, removeTmpDir } from "../shared/test-fixtures.ts";
 import { claudeProcessSpawner } from "./process.ts";
+
+inTestFactory();
 
 const skipOnWindows = process.platform === "win32";
 

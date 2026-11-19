@@ -1,8 +1,11 @@
 import { expect, test } from "vitest";
+import { inTestFactory } from "../../../test-fixtures.ts";
 import { claudeDriver } from "../claude/driver.ts";
 import { codexDriver } from "../codex/driver.ts";
 import { piDriver } from "../pi/driver.ts";
 import { harnessEnv } from "./env.ts";
+
+inTestFactory();
 
 const service = () => ({
   PATH: "/usr/bin",

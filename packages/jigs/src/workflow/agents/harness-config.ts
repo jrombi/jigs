@@ -4,6 +4,7 @@ import type { Options as ClaudeAgentOptions } from "@anthropic-ai/claude-agent-s
 import type { CodexAppServerSettings } from "ai-sdk-provider-codex-cli";
 import { JigsError } from "../errors.ts";
 import { assertAgentAccess } from "./agent-access.ts";
+import { assertClaudeCredential } from "./claude-credential.ts";
 import { assertPiMcpServers } from "./pi-mcp.ts";
 
 /**
@@ -256,8 +257,44 @@ export type AgentInstallation = { installationName: string };
 export type HarnessSkills = { skills?: string[] };
 
 /**
+ * Claude Code pays for its calls with an Anthropic API key, read from `apiKeyEnv` in the
+ * factory's environment, or `ANTHROPIC_API_KEY` when that is left out.
+ *
+ * @group Harnesses and models
+ */
+export type ClaudeApiKeyCredential = { kind: "api-key"; apiKeyEnv?: string };
+/**
+ * Claude Code calls its models through Amazon Bedrock, with the AWS credentials and region the
+ * factory's environment holds: static keys, a profile, or the credentials an ECS task, a Fargate
+ * task or an EKS pod is given.
+ *
+ * @group Harnesses and models
+ */
+export type ClaudeBedrockCredential = { kind: "bedrock" };
+/**
+ * How Claude Code pays for its calls when not through a claude.ai subscription login.
+ *
+ * @remarks
+ * Leave it out to use the account `claude auth login` signed in, which is the default. Workflow
+ * code never holds a key: `api-key` names the variable the step reads when the agent starts, and
+ * `bedrock` passes the AWS variables the service has through to the agent.
+ *
+ * @example
+ * ```ts
+ * import { harnesses } from "@jigs-ai/jigs";
+ *
+ * const hosted = harnesses.claude({ model: "opus", credential: { kind: "api-key" } });
+ * const onAws = harnesses.claude({ model: "opus", credential: { kind: "bedrock" } });
+ * ```
+ *
+ * @group Harnesses and models
+ */
+export type ClaudeCredential = ClaudeApiKeyCredential | ClaudeBedrockCredential;
+
+/**
  * A Claude Code harness descriptor: the Claude Agent SDK's own options that are data, minus each
- * {@link ClaudePolicyKey}, plus the model, jigs' MCP server shape and {@link HarnessSkills}.
+ * {@link ClaudePolicyKey}, plus the model, jigs' MCP server shape, {@link HarnessSkills} and an
+ * optional {@link ClaudeCredential}.
  *
  * @group Harnesses and models
  */
@@ -265,6 +302,8 @@ export type ClaudeHarness = JsonOnly<Omit<ClaudeAgentOptions, ClaudePolicyKey>> 
   HarnessSkills & {
     kind: "claude";
     model: string;
+    /** An API key or Bedrock instead of the subscription login. */
+    credential?: ClaudeCredential;
     mcpServers?: Record<string, McpServerConfig>;
     /** Acts on GitHub as the factory's App, through this installation. */
     github?: AgentInstallation;
@@ -523,13 +562,23 @@ function piHarness(model: ModelSource, options: PiHarnessOptions = {}): PiHarnes
 
 /**
  * Build a Claude Code harness from the model and any Claude Code settings. Without `tools` or
- * `mcpServers` it also works with `askAgent`.
+ * `mcpServers` it also works with `askAgent`. A `credential` the drivers cannot forward throws
+ * here, when the workflow module loads.
  *
  * @example
  * ```ts
  * import { harnesses } from "@jigs-ai/jigs";
  *
  * const builder = harnesses.claude({ model: "opus", effort: "high", maxTurns: 40 });
+ * ```
+ *
+ * @example
+ * `credential` pays with an Anthropic API key or through Amazon Bedrock instead of the
+ * subscription login.
+ * ```ts
+ * import { harnesses } from "@jigs-ai/jigs";
+ *
+ * const hosted = harnesses.claude({ model: "opus", credential: { kind: "api-key" } });
  * ```
  *
  * @example
@@ -546,6 +595,7 @@ function claudeHarness<O extends ClaudeHarnessSettings>(
 ): HarnessForOptions<ClaudeHarness, O>;
 function claudeHarness(settings: ClaudeHarnessSettings): ClaudeHarness {
   assertAgentAccess(settings);
+  assertClaudeCredential(settings.credential);
   return { kind: "claude", ...settings };
 }
 

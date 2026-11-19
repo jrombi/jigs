@@ -163,6 +163,12 @@ export interface Driver<K extends HarnessKind | ModelKind> {
   /** Checks that hold for every descriptor of this kind, such as the installed CLI. */
   installationChecks(): Check[];
   /**
+   * Checks on how the descriptor pays for its calls, such as the login or key its harness runs
+   * on. Preflight and doctor run them ahead of a run; the step does not, since a wrong credential
+   * fails its first call anyway.
+   */
+  credentialChecks?(descriptor: DriverDescriptor<K>): Check[];
+  /**
    * Every check the descriptor alone decides, such as the credential its model source reads.
    * Preflight and doctor run them ahead of a run, and the step runs them again before it starts.
    */

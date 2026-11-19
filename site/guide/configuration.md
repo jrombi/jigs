@@ -539,7 +539,9 @@ agents: { env: ["SSH_AUTH_SOCK", "MISE_DATA_DIR"] },
 
 The list holds names only; the values come from the service's environment when
 an agent starts. Model keys such as `OPENROUTER_API_KEY` and variables jigs
-sets itself cannot be listed; name a model key on its model source instead. An
+sets itself cannot be listed; name a model key on its model source, or a Claude
+Code key on the harness's [`credential`](/guide/models-and-harnesses#claude-code),
+instead. An
 agent that [acts as the App](/guide/models-and-harnesses#github-access) gets its
 GitHub token from jigs, not from this list.
 This limits what agents see in their environment only. They still run as your
@@ -797,6 +799,7 @@ These are the values every copy shares, in `.env`:
 | --- | --- |
 | `WORKFLOW_TARGET_WORLD` | Always. Filled in by `jigs init`; leave it. |
 | `OPENROUTER_API_KEY` | Workflows that use `models.openrouter()`. |
+| `ANTHROPIC_API_KEY` | Workflows whose Claude harness declares [`credential: { kind: "api-key" }`](/guide/models-and-harnesses#claude-code). A Bedrock credential takes the AWS variables instead. |
 | `JIGS_CLAUDE_EXECUTABLE` | Optional. Path to `claude` when it is not on the service's `PATH`. |
 | `AWS_PROFILE` | Workflows that declare `requires: { aws: true }`. Preflight checks the profile with `aws sts get-caller-identity`. For an SSO profile it skips cached role credentials, so an expired `aws sso login` fails the check. |
 | `WORKFLOW_POSTGRES_MAX_POOL_SIZE` | Optional. How many database connections the World opens, 10 by default. The queue runs up to 50 jobs at once, so under heavy load raise it to 50. Every copy sharing a Postgres server counts toward its connection limit, 100 by default. |

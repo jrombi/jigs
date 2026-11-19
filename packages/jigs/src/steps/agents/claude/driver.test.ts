@@ -1,8 +1,10 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { harnesses } from "../../../workflow/agents/harness-config.ts";
-import { buildAskAgentRequest } from "../../../workflow/agents/plan.ts";
-import { createClaudeDriver } from "./driver.ts";
+import { type ClaudeCredential, harnesses } from "../../../workflow/agents/harness-config.ts";
+import { buildAgentRequest, buildAskAgentRequest } from "../../../workflow/agents/plan.ts";
+import type { RunRequest } from "../shared/types.ts";
+import { BEDROCK_ENV } from "./credential.ts";
+import { claudeDriver, createClaudeDriver } from "./driver.ts";
 import { fakeClaudeQuery } from "./test-fixtures.ts";
 
 beforeEach(() => {
@@ -36,6 +38,108 @@ const ask = (messages: SDKMessage[]) =>
     deps: {} as never,
     env: {},
   });
+
+const claudeWith = (credential?: ClaudeCredential) =>
+  harnesses.claude({ model: "haiku", ...(credential === undefined ? {} : { credential }) });
+
+// The names a step hands Claude Code for each way of paying; values stay in the service.
+test("the allowlist adds exactly the credential's variables", () => {
+  const names = (credential?: ClaudeCredential) =>
+    [...claudeDriver.envAllowlist({ harness: claudeWith(credential), cwd: "/w" })].sort();
+  expect(names()).toEqual(["CLAUDE_CONFIG_DIR"]);
+  expect(names({ kind: "api-key" })).toEqual(["ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR"]);
+  expect(names({ kind: "api-key", apiKeyEnv: "TEAM_KEY" })).toEqual([
+    "CLAUDE_CONFIG_DIR",
+    "TEAM_KEY",
+  ]);
+  expect(names({ kind: "bedrock" })).toEqual(["CLAUDE_CONFIG_DIR", ...BEDROCK_ENV].sort());
+});
+
+test("the login check follows the descriptor's credential, and the CLI check stays per installation", () => {
+  const ids = (credential?: ClaudeCredential) =>
+    claudeDriver.credentialChecks?.(claudeWith(credential)).map((check) => check.id);
+  expect(claudeDriver.installationChecks().map((check) => check.id)).toEqual([
+    "harness.claude-cli",
+  ]);
+  expect(ids()).toEqual(["harness.claude-auth"]);
+  expect(ids({ kind: "api-key" })).toEqual(["harness.claude-api-key-anthropic-api-key"]);
+  expect(ids({ kind: "api-key", apiKeyEnv: "TEAM_KEY" })).toEqual([
+    "harness.claude-api-key-team-key",
+  ]);
+  expect(ids({ kind: "bedrock" })).toEqual(["harness.claude-bedrock"]);
+});
+
+// What the step built from the allowlist, as the driver receives it.
+const stepEnv = {
+  PATH: "/usr/bin",
+  CLAUDE_CONFIG_DIR: "/home/tester/.claude-work",
+  TEAM_KEY: "sk-ant-team",
+  AWS_PROFILE: "factory",
+  AWS_REGION: "us-east-1",
+};
+
+async function envHandedToClaude(credential: ClaudeCredential | undefined, inWorktree: boolean) {
+  const query = fakeClaudeQuery();
+  const driver = createClaudeDriver({
+    query,
+    transcript: async () => new Set(),
+    openStepStream: () => undefined,
+  });
+  const context = { metadata: { workflowRunId: "wrun_env" }, deps: {} as never, env: stepEnv };
+  if (inWorktree) {
+    await driver.run?.(
+      buildAgentRequest({ harness: claudeWith(credential), cwd: "/w", prompt: "go" }) as RunRequest,
+      context,
+    );
+  } else {
+    await driver.ask?.(
+      buildAskAgentRequest({ harness: claudeWith(credential), prompt: "go" }),
+      context,
+    );
+  }
+  return query.calls[0]?.options.env;
+}
+
+test.each([true, false])(
+  "Claude Code gets the step environment as is for the subscription login (worktree: %s)",
+  async (inWorktree) => {
+    expect(await envHandedToClaude(undefined, inWorktree)).toEqual(stepEnv);
+  },
+);
+
+test.each([true, false])(
+  "an api-key credential moves the named variable to ANTHROPIC_API_KEY (worktree: %s)",
+  async (inWorktree) => {
+    const { TEAM_KEY: _moved, ...rest } = stepEnv;
+    expect(await envHandedToClaude({ kind: "api-key", apiKeyEnv: "TEAM_KEY" }, inWorktree)).toEqual(
+      { ...rest, ANTHROPIC_API_KEY: "sk-ant-team" },
+    );
+  },
+);
+
+test("an api-key credential reading ANTHROPIC_API_KEY itself passes the environment through", async () => {
+  const query = fakeClaudeQuery();
+  const driver = createClaudeDriver({ query, openStepStream: () => undefined });
+  await driver.ask?.(
+    buildAskAgentRequest({ harness: claudeWith({ kind: "api-key" }), prompt: "go" }),
+    {
+      metadata: { workflowRunId: "wrun_env" },
+      deps: {} as never,
+      env: { PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-ant" },
+    },
+  );
+  expect(query.calls[0]?.options.env).toEqual({ PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-ant" });
+});
+
+test.each([true, false])(
+  "a bedrock credential switches Claude Code to Bedrock over the AWS variables (worktree: %s)",
+  async (inWorktree) => {
+    expect(await envHandedToClaude({ kind: "bedrock" }, inWorktree)).toEqual({
+      ...stepEnv,
+      CLAUDE_CODE_USE_BEDROCK: "1",
+    });
+  },
+);
 
 test("an error result names the error of the last assistant message only", async () => {
   await expect(ask([assistant("rate_limit"), assistant(), maxTurns])).rejects.toThrow(

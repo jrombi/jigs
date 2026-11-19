@@ -253,6 +253,44 @@ jigs drives that `claude` through the Claude Agent SDK and runs it unattended
 with permission prompts bypassed. `askAgent` uses the model without tools, MCP
 servers or filesystem settings.
 
+A service that cannot hold a claude.ai login, such as a factory a team hosts on
+a server or in a container, pays another way with `credential`. The default,
+without it, is the subscription login above.
+
+```ts
+import { harnesses } from "@jigs-ai/jigs";
+
+// An Anthropic API key, read from ANTHROPIC_API_KEY in the factory's environment.
+harnesses.claude({ model: "opus", credential: { kind: "api-key" } });
+
+// The same, read from another variable.
+harnesses.claude({ model: "opus", credential: { kind: "api-key", apiKeyEnv: "TEAM_ANTHROPIC_KEY" } });
+
+// Amazon Bedrock, with the AWS credentials and region the service has.
+harnesses.claude({ model: "us.anthropic.claude-opus-4-1-20250805-v1:0", credential: { kind: "bedrock" } });
+```
+
+`api-key` names a variable in the factory's [environment](/guide/configuration#env);
+the step reads it when the agent starts and hands it to Claude Code as
+`ANTHROPIC_API_KEY`. Preflight and `jigs doctor` fail when it is unset, and
+when the `claude` on the service's `PATH` does not pick it up.
+
+`bedrock` sets `CLAUDE_CODE_USE_BEDROCK=1` for the agent and passes through
+the AWS variables the service has: `AWS_REGION`, `AWS_DEFAULT_REGION`, static
+keys (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), a
+profile and its files (`AWS_PROFILE`, `AWS_CONFIG_FILE`,
+`AWS_SHARED_CREDENTIALS_FILE`), the credential endpoint of an ECS or Fargate
+task (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`,
+`AWS_CONTAINER_CREDENTIALS_FULL_URI`, `AWS_CONTAINER_AUTHORIZATION_TOKEN`,
+`AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`), the web identity of an EKS pod
+(`AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_ROLE_ARN`) and `AWS_BEARER_TOKEN_BEDROCK`.
+Preflight and `jigs doctor` fail when none of the credential sources is set;
+they do not call Bedrock, so a key without access to the model fails on the
+agent's first call. The model is Bedrock's model ID.
+
+Credentials never go in workflow code or in [`agents.env`](/guide/configuration#agents-env):
+`credential` is the one place that hands Claude Code a key.
+
 ## Codex
 
 `harnesses.codex({ model, ...settings })` is a harness for `runAgent`. Install

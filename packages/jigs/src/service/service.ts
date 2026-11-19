@@ -14,7 +14,7 @@ import { currentFactoryContext, seedFactoryContext } from "../config/factory-con
 import { JigsError } from "../errors.ts";
 import type { Factory, FactoryDefinition } from "../workflow/factory.ts";
 import { parseFactoryConfig } from "../workflow/factory-schema.ts";
-import { activeFactory } from "./active.ts";
+import { activeFactory, inactiveScheduleNames, inactiveTriggerNames } from "./active.ts";
 import { startWorld } from "./boot.ts";
 import { deploymentVersion, setDeploymentVersion } from "./role-state.ts";
 import { runAsOnlyCopy, runAsVersion } from "./versioned.ts";
@@ -60,9 +60,14 @@ export function pinDeploymentVersion(): void {
     setDeploymentVersion(version, configuredJobPrefix(ctx));
   } catch (err) {
     if (!(err instanceof JigsError)) throw err;
-    console.error(`[service] ${err.message}${err.hint === undefined ? "" : `\n${err.hint}`}`);
+    console.error(`[service] ${messageWithHint(err)}`);
     process.exit(1);
   }
+}
+
+function messageWithHint(err: JigsError): string {
+  if (err.hint === undefined) return err.message;
+  return `${err.message}\n${err.hint}`;
 }
 
 /**
@@ -75,7 +80,7 @@ export function pinDeploymentVersion(): void {
 export function startService(factory: Factory, config: FactoryDefinition): void {
   seedFactoryContext(parseFactoryConfig(config));
   const live = activeFactory(factory);
-  logInactive(factory, live);
+  logInactive(factory);
   // Neither is awaited, the way Nitro runs separate plugins: the role waits
   // on the World's readiness itself.
   void startWorld(live);
@@ -86,9 +91,7 @@ export function startService(factory: Factory, config: FactoryDefinition): void 
   });
 }
 
-function logInactive(factory: Factory, live: Factory): void {
-  for (const name of Object.keys(factory.schedules ?? {}))
-    if (live.schedules?.[name] === undefined) console.log(`[schedule] ${name} inactive`);
-  for (const name of Object.keys(factory.triggers ?? {}))
-    if (live.triggers?.[name] === undefined) console.log(`[trigger] ${name} inactive`);
+function logInactive(factory: Factory): void {
+  for (const name of inactiveScheduleNames(factory)) console.log(`[schedule] ${name} inactive`);
+  for (const name of inactiveTriggerNames(factory)) console.log(`[trigger] ${name} inactive`);
 }

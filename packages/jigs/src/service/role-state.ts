@@ -42,6 +42,12 @@ export function currentVersion(): string | null {
   return current;
 }
 
+/** Which version is current, as a clause for a log line or an error. */
+export function whoIsCurrent(currentName: string | null): string {
+  if (currentName === null) return "no version is current";
+  return `version ${currentName} is current`;
+}
+
 /** Test seam. */
 export function resetRoleState(): void {
   version = undefined;

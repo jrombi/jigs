@@ -262,6 +262,7 @@ test("health outside a factory reports a null root rather than failing liveness"
 
 test("GET /api/deployments lists the versions the registry holds, with this copy's own", async () => {
   setDeploymentVersion("v2", "workflow_");
+  setServiceRole("current", "v2");
   const views = [
     {
       version: "v2",
@@ -303,6 +304,27 @@ test("a draining copy answers 503 on every route but its liveness, which names b
     currentVersion: "v2",
   });
   expect((await app.request("/api/workflows/plain/runs", { method: "POST" })).status).toBe(503);
+});
+
+test("a versioned copy that has not read its role yet refuses the API but answers its liveness", async () => {
+  setDeploymentVersion("v1", "workflow_");
+
+  expect((await app.request("/health")).status).toBe(200);
+  const start = await app.request("/api/workflows/plain/runs", { method: "POST" });
+  expect(start.status).toBe(503);
+  expect(await start.json()).toEqual({
+    error:
+      "this copy runs version v1, whose role is not known yet: it has not read the factory's current version",
+    version: "v1",
+    currentVersion: null,
+  });
+});
+
+test("a versioned copy serves the API once it is current", async () => {
+  setDeploymentVersion("v1", "workflow_");
+  setServiceRole("current", "v1");
+
+  expect((await app.request("/api/runs")).status).toBe(200);
 });
 
 test("GET /api/runs answers with empty runs when nothing has launched", async () => {

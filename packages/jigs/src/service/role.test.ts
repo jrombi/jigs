@@ -23,7 +23,7 @@ function harness(
         fire = undefined;
       };
     },
-    startFull: async () => {
+    startCurrentRole: async () => {
       const parts = { stop: vi.fn(async () => {}) };
       started.push(parts);
       return parts;
@@ -112,6 +112,28 @@ test("a draining copy that was current and owns nothing exits", async () => {
 
   expect(h.lines).toContain("[service] version v1 drained, exiting");
   expect(h.exits).toEqual(["version v1 drained"]);
+});
+
+test("a draining copy made current while it checks its past does not exit", async () => {
+  const { promise: pastChecked, resolve: answerPast } = Promise.withResolvers<boolean>();
+  let pastAsked = false;
+  const h = harness({
+    wasEverCurrent: () => {
+      pastAsked = true;
+      return pastChecked;
+    },
+  });
+  h.setCurrent("v2");
+  await h.controller.refresh();
+  await vi.waitFor(() => expect(pastAsked).toBe(true));
+
+  h.setCurrent("v1");
+  await h.controller.refresh();
+  answerPast(true);
+  await settle();
+
+  expect(h.controller.role()).toBe("current");
+  expect(h.exits).toEqual([]);
 });
 
 test("a draining copy that was never current stays up, for whoever started it", async () => {

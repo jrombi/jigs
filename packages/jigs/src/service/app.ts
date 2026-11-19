@@ -33,6 +33,7 @@ import {
   deploymentBasePrefix,
   deploymentVersion,
   serviceRole,
+  whoIsCurrent,
 } from "./role-state.ts";
 import {
   listRunSteps,
@@ -95,18 +96,19 @@ export function createApp(factory: Factory, deps: Partial<AppDeps> = {}): Reques
     }),
   );
 
-  // A draining copy serves nothing but its liveness: the current version is
-  // the factory, and a command that reached this copy should go there.
+  // A versioned copy serves nothing but its liveness unless it is current: the
+  // current version is the factory, and a command that reached this copy
+  // should go there.
   app.use((_request, response, next) => {
-    if (serviceRole() !== "draining") {
+    const refusal = whyNotServing();
+    if (refusal === undefined) {
       next();
       return;
     }
-    const current = currentVersion();
     response.status(503).json({
-      error: `this copy runs version ${deploymentVersion()}, which is draining${current === null ? "" : `; version ${current} is current`}`,
+      error: refusal,
       version: deploymentVersion(),
-      currentVersion: current,
+      currentVersion: currentVersion(),
     });
   });
 
@@ -393,4 +395,17 @@ function dashboardPointer(ctx: FactoryContext, runId: string): string {
 async function heldTokens(world: AppDeps["world"], runId: string): Promise<string[]> {
   const hooks = await (await world()).hooks.list({ runId });
   return hooks.data.map((hook) => hook.token);
+}
+
+// Why this copy refuses the API, or undefined while it serves it. A copy with
+// no deployment version is the factory's only copy and always serves.
+function whyNotServing(): string | undefined {
+  const version = deploymentVersion();
+  if (version === undefined) return undefined;
+  const role = serviceRole();
+  if (role === "current") return undefined;
+  if (role === undefined) {
+    return `this copy runs version ${version}, whose role is not known yet: it has not read the factory's current version`;
+  }
+  return `this copy runs version ${version}, which is draining; ${whoIsCurrent(currentVersion())}`;
 }

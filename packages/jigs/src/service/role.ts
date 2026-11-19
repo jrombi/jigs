@@ -3,17 +3,17 @@
 // owns nothing. The role follows the registry's current version,
 // read at boot, on every notification and on a slow poll behind them.
 
-import type { ServiceRole } from "./role-state.ts";
+import { type ServiceRole, whoIsCurrent } from "./role-state.ts";
 
 /** What runs only while this copy is the current version. */
-export interface RoleParts {
+export interface CurrentRoleParts {
   stop(): Promise<void>;
 }
 
 export interface DrainReport {
   /** Live runs this version started and still drives. */
   owned: number;
-  /** Jobs still waiting or locked on this version's task. */
+  /** Jobs on this version's tasks that can still do work. */
   queued: number;
 }
 
@@ -24,7 +24,7 @@ export interface RoleControllerDeps {
   wasEverCurrent: () => Promise<boolean>;
   /** Called on each notification that the current version changed; returns how to unsubscribe. */
   subscribe: (fire: () => void) => () => void;
-  startFull: () => Promise<RoleParts>;
+  startCurrentRole: () => Promise<CurrentRoleParts>;
   /** One pass of draining: what this version still owns, after cancelling what outlived its cap. */
   drain: () => Promise<DrainReport>;
   onRole?: (role: ServiceRole, current: string | null) => void;
@@ -52,7 +52,7 @@ export interface RoleController {
 export function startRoleController(deps: RoleControllerDeps): RoleController {
   let role: ServiceRole | undefined;
   let current: string | null = null;
-  let parts: RoleParts | undefined;
+  let parts: CurrentRoleParts | undefined;
   let stopped = false;
   let refreshing: Promise<void> | undefined;
   let refreshAgain = false;
@@ -66,23 +66,21 @@ export function startRoleController(deps: RoleControllerDeps): RoleController {
   async function takeRole(next: ServiceRole): Promise<void> {
     if (next === "current") {
       deps.log(`[service] version ${deps.version} is current`);
-      parts = await deps.startFull();
+      parts = await deps.startCurrentRole();
       return;
     }
-    deps.log(
-      `[service] version ${deps.version} is draining${current === null ? "; no version is current" : `; version ${current} is current`}`,
-    );
+    deps.log(`[service] version ${deps.version} is draining; ${whoIsCurrent(current)}`);
     const running = parts;
     parts = undefined;
     await running?.stop();
   }
 
   async function readRole(): Promise<void> {
-    const seen = await deps.currentVersion();
+    const latestCurrent = await deps.currentVersion();
     if (stopped) return;
-    const next = roleFor(seen);
-    const changed = next !== role || seen !== current;
-    current = seen;
+    const next = roleFor(latestCurrent);
+    const changed = next !== role || latestCurrent !== current;
+    current = latestCurrent;
     if (!changed) return;
     const switched = next !== role;
     role = next;
@@ -112,10 +110,14 @@ export function startRoleController(deps: RoleControllerDeps): RoleController {
     return refreshing;
   }
 
+  // Re-checked after every await: `jigs deployments current` may make this
+  // version current meanwhile, and a current copy must never exit.
+  const stillDraining = () => role === "draining" && !stopped;
+
   async function drainPass(): Promise<void> {
-    if (role !== "draining" || stopped) return;
+    if (!stillDraining()) return;
     const report = await deps.drain();
-    if (stopped || role !== "draining") return;
+    if (!stillDraining()) return;
     if (report.owned > 0 || report.queued > 0) {
       deps.log(
         `[service] version ${deps.version} draining: ${report.owned} run(s) owned, ${report.queued} job(s) queued`,
@@ -125,6 +127,7 @@ export function startRoleController(deps: RoleControllerDeps): RoleController {
     // A version that was never current is a copy someone started on purpose,
     // such as a smoke test, and is theirs to stop.
     if (!(await deps.wasEverCurrent())) return;
+    if (!stillDraining()) return;
     deps.log(`[service] version ${deps.version} drained, exiting`);
     stopped = true;
     deps.exit(`version ${deps.version} drained`);

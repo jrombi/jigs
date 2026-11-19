@@ -8,6 +8,7 @@ import { currentFactoryContext, type FactoryContext } from "../config/factory-co
 import { hubConnection } from "../providers/hub.ts";
 import { registrySql } from "../steps/runtime/registry.ts";
 import type { Factory } from "../workflow/factory.ts";
+import { inactiveTriggerNames } from "./active.ts";
 import { startAutomaticRelease } from "./automatic-release.ts";
 import { startDashboard } from "./dashboard.ts";
 import { drainPass } from "./deployments/drain.ts";
@@ -24,7 +25,7 @@ import { startHubClient } from "./hub-client.ts";
 import { startLiveTurnRelay } from "./live-turn-relay.ts";
 import { whenReady } from "./readiness.ts";
 import { registryListener } from "./registry-listener.ts";
-import { type RoleParts, startRoleController } from "./role.ts";
+import { type CurrentRoleParts, startRoleController } from "./role.ts";
 import {
   deploymentBasePrefix,
   deploymentVersion,
@@ -42,14 +43,18 @@ const setTimer = (fire: () => void, ms: number) => {
 };
 
 /**
- * Once the World is ready, be the factory for as long as this copy runs: the copy has no
- * deployment version, so no other copy shares its work. `live` is the factory with only its
- * active triggers and schedules.
+ * Be the factory for as long as this copy runs: the copy has no deployment version, so no other
+ * copy shares its work. `live` is the factory with only its active triggers and schedules.
  */
 export async function runAsOnlyCopy(factory: Factory, live: Factory): Promise<void> {
+  // Started before the World is ready, as each part waits on readiness itself,
+  // so the dashboard is up while the boot gates run.
+  const work = startFactoryWork(factory, live);
+  onShutdown(() => work.stop(), { phase: "quiesce" });
+  void startDashboard().then((dashboard) => onShutdown(() => dashboard.close()));
   await whenReady();
-  const parts = await startFullRole(factory, live, currentFactoryContext());
-  onShutdown(() => parts.stop(), { phase: "quiesce" });
+  const client = startHub(currentFactoryContext());
+  onShutdown(async () => client?.stop(), { phase: "quiesce" });
 }
 
 /**
@@ -87,7 +92,7 @@ export async function runAsVersion(factory: Factory, live: Factory): Promise<voi
       listener.subscribe(DEPLOYMENTS_CHANNEL, (payload) => {
         if (payload === slug) fire();
       }),
-    startFull: () => startFullRole(factory, live, ctx),
+    startCurrentRole: () => startCurrentRole(factory, live, ctx),
     drain: () =>
       drainPass({
         db,
@@ -108,34 +113,44 @@ export async function runAsVersion(factory: Factory, live: Factory): Promise<voi
 // Everything only the factory does: hearing the hub, firing triggers and
 // schedules, releasing, and answering on the dashboard. Started on becoming
 // current, stopped on ceasing to be.
-async function startFullRole(
+async function startCurrentRole(
   factory: Factory,
   live: Factory,
   ctx: FactoryContext,
-): Promise<RoleParts> {
-  const inactive = Object.keys(factory.triggers ?? {}).filter(
-    (name) => live.triggers?.[name] === undefined,
-  );
-  void withdrawInactive(inactive);
-  const schedules = startSchedules(live);
-  const triggers = startTriggers(live);
-  const release = startAutomaticRelease(factory);
+): Promise<CurrentRoleParts> {
+  const work = startFactoryWork(factory, live);
   const dashboard = await startDashboard();
-  const hub = hubConnection(ctx);
-  const client =
-    hub === undefined
-      ? undefined
-      : startHubClient({ ...hub, route: { context: ctx, push: pushEvent } });
+  const client = startHub(ctx);
   return {
     async stop() {
       // The hub first, so no event is admitted into triggers that are stopping.
       await client?.stop();
-      await triggers.stop();
-      for (const job of schedules) job.stop();
-      await release.stop();
+      await work.stop();
       await dashboard.close();
     },
   };
+}
+
+function startFactoryWork(factory: Factory, live: Factory): { stop(): Promise<void> } {
+  void withdrawInactive(inactiveTriggerNames(factory));
+  const schedules = startSchedules(live);
+  const triggers = startTriggers(live);
+  const release = startAutomaticRelease(factory);
+  return {
+    async stop() {
+      await triggers.stop();
+      for (const job of schedules) job.stop();
+      await release.stop();
+    },
+  };
+}
+
+// The hub keeps what it holds until it is confirmed, so whatever arrived while
+// the copy was not the factory comes first.
+function startHub(ctx: FactoryContext): { stop(): Promise<void> } | undefined {
+  const hub = hubConnection(ctx);
+  if (hub === undefined) return undefined;
+  return startHubClient({ ...hub, route: { context: ctx, push: pushEvent } });
 }
 
 export type { ServiceRole };

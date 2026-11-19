@@ -48,7 +48,7 @@ beforeAll(async () => {
     env: { ...process.env, WORKFLOW_POSTGRES_URL: testUrl.toString() },
     stdio: "ignore",
   });
-  // West of UTC, where world-postgres' zone-less created_at reads back early.
+  // West of UTC, so a lookup that trusted the server's clock would show.
   await admin.query(`ALTER DATABASE "${database}" SET timezone TO 'America/Los_Angeles'`);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   oldBaseUrl = process.env.WORKFLOW_LOCAL_BASE_URL;
@@ -95,9 +95,6 @@ dbTest("a started run is found by its attribute, whatever the server's time zone
   await launch("b".repeat(64));
 
   expect(runIdTime(runId)).toBeGreaterThanOrEqual(since.getTime());
-  // The skew the lookup must not stop on: created_at reads back hours early.
-  const stored = await world.runs.get(runId, { resolveData: "none" });
-  expect(stored.createdAt.getTime()).toBeLessThan(since.getTime() - 3_600_000);
   expect(
     await findRunsByAttribute({
       workflowName,

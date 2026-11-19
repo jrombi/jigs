@@ -148,9 +148,8 @@ export async function findRunsByAttribute(query: {
   const found: Array<{ runId: string; status: string }> = [];
   for await (const run of listedRuns({ workflowName: query.workflowName }, 100)) {
     // Stops early on two assumptions: world-postgres lists by run ID, newest
-    // first, and a run ID is a ULID minted on this process's clock. An ID
-    // that does not decode never stops the scan. (created_at is no help: a
-    // zone-less timestamp that reads back hours off on a server not in UTC.)
+    // first, and a run ID is a ULID minted on this process's clock, which no
+    // server time zone can skew. An ID that does not decode never stops the scan.
     const minted = runIdTime(run.runId);
     if (minted !== null && minted < query.since.getTime()) return found;
     if (run.attributes?.[query.key] === query.value)

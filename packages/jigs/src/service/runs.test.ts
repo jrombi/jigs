@@ -413,8 +413,8 @@ function runIdAt(at: Date, tail: string): string {
 test("a run is found by its plaintext attribute, newest first, not before `since`", async () => {
   const listed: unknown[] = [];
   const minute = (m: number) => new Date(Date.UTC(2026, 8, 29, 12, m));
-  // created_at reads back seven hours early, as world-postgres' timestamp
-  // column does on a server west of UTC; only the run ID's time is honest.
+  // created_at is skewed seven hours early, as world-postgres stored it before
+  // 5.0.5 on a server west of UTC; only the run ID's time is trusted.
   const run = (m: number, tail: string, value?: string) => ({
     runId: runIdAt(minute(m), tail),
     workflowName: STAMPED_WORKFLOW_ID,

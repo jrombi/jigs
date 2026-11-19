@@ -1,5 +1,5 @@
-// A copy's deployment version: the World's deployment id for the runs the
-// copy starts, and the Graphile task its queue worker claims (ADR 0019). Hosted copies set it in
+// A copy's deployment version: the Graphile tasks its queue worker claims and
+// the job prefix it stamps on the runs it drives (ADR 0019). Hosted copies set it in
 // their environment; `jigs up` sets it from the built bundle's hash.
 
 import { JigsError } from "../errors.ts";
@@ -8,7 +8,10 @@ import type { FactoryContext } from "./factory-context.ts";
 /** The environment variable a copy's deployment version comes from. */
 export const DEPLOYMENT_VERSION_VARIABLE = "JIGS_DEPLOYMENT_VERSION";
 
-/** The World's own variable, which jigs sets from the version; a factory never sets it. */
+/**
+ * The World's deployment pinning, which a versioned factory leaves unset: with it, the SDK runs
+ * a run only on the deployment that started it, so no run could be handed over.
+ */
 export const WORLD_DEPLOYMENT_VARIABLE = "WORKFLOW_POSTGRES_DEPLOYMENT_ID";
 
 /** The World's variable for the base of its Graphile task names. */
@@ -50,6 +53,12 @@ export function validateDeploymentVersion(
 
 /** This copy's deployment version from its environment, validated against the World's job prefix. */
 export function configuredDeploymentVersion(ctx: FactoryContext): string {
+  if (ctx.env(WORLD_DEPLOYMENT_VARIABLE) !== undefined) {
+    throw new JigsError(
+      `${WORLD_DEPLOYMENT_VARIABLE} is set`,
+      `remove it: the service names its version with ${DEPLOYMENT_VERSION_VARIABLE}, and the World's own pinning would keep every run on the version that started it`,
+    );
+  }
   const version = ctx.env(DEPLOYMENT_VERSION_VARIABLE);
   if (version === undefined) {
     throw new JigsError(
@@ -60,7 +69,7 @@ export function configuredDeploymentVersion(ctx: FactoryContext): string {
   return validateDeploymentVersion(version, configuredJobPrefix(ctx));
 }
 
-/** The base the World builds its Graphile task names from in this factory. */
+/** The base the factory's versions build their Graphile task names from. */
 export function configuredJobPrefix(ctx: FactoryContext): string {
   return ctx.env(WORLD_JOB_PREFIX_VARIABLE) ?? DEFAULT_JOB_PREFIX;
 }

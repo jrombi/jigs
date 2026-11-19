@@ -5,11 +5,13 @@
 export type ServiceRole = "current" | "draining";
 
 let version: string | undefined;
+let basePrefix: string | undefined;
 let role: ServiceRole | undefined;
 let current: string | null = null;
 
-export function setDeploymentVersion(next: string): void {
+export function setDeploymentVersion(next: string, jobPrefix: string): void {
   version = next;
+  basePrefix = jobPrefix;
 }
 
 /** This copy's deployment version, once the service has pinned it. */
@@ -27,6 +29,14 @@ export function serviceRole(): ServiceRole | undefined {
   return role;
 }
 
+/**
+ * The base job prefix of the factory's versions, read before the service replaced the World's
+ * variable with this version's own.
+ */
+export function deploymentBasePrefix(): string | undefined {
+  return basePrefix;
+}
+
 /** The factory's current version as this copy last read it. */
 export function currentVersion(): string | null {
   return current;
@@ -35,6 +45,7 @@ export function currentVersion(): string | null {
 /** Test seam. */
 export function resetRoleState(): void {
   version = undefined;
+  basePrefix = undefined;
   role = undefined;
   current = null;
 }

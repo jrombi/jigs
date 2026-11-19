@@ -4,7 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { currentFactoryContext } from "../config/factory-context.ts";
 import { inTestFactory } from "../test-fixtures.ts";
 import type { Factory } from "../workflow/factory.ts";
-import { deploymentVersion, resetRoleState } from "./role-state.ts";
+import { deploymentBasePrefix, deploymentVersion, resetRoleState } from "./role-state.ts";
 import { listenOnServicePort, pinDeploymentVersion, startService } from "./service.ts";
 import { runAsVersion } from "./versioned.ts";
 
@@ -55,14 +55,28 @@ test("the role runs only the active triggers and schedules; each inactive one is
   expect(lines).toEqual(["[schedule] quiet inactive", "[trigger] off inactive"]);
 });
 
-test("the service pins the World to JIGS_DEPLOYMENT_VERSION", () => {
+test("the service gives the World a job prefix of its own from JIGS_DEPLOYMENT_VERSION", () => {
   vi.stubEnv("JIGS_DEPLOYMENT_VERSION", "2026.11.18-a1b2");
   vi.stubEnv("WORKFLOW_POSTGRES_DEPLOYMENT_ID", "");
+  vi.stubEnv("WORKFLOW_POSTGRES_JOB_PREFIX", "acme_");
 
   pinDeploymentVersion();
 
-  expect(process.env.WORKFLOW_POSTGRES_DEPLOYMENT_ID).toBe("2026.11.18-a1b2");
+  expect(process.env.WORKFLOW_POSTGRES_JOB_PREFIX).toBe("acme_2026.11.18-a1b2_");
   expect(deploymentVersion()).toBe("2026.11.18-a1b2");
+  expect(deploymentBasePrefix()).toBe("acme_");
+});
+
+test("a service with the World's own deployment pinning set exits saying so", () => {
+  vi.stubEnv("JIGS_DEPLOYMENT_VERSION", "v1");
+  vi.stubEnv("WORKFLOW_POSTGRES_DEPLOYMENT_ID", "v1");
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+  pinDeploymentVersion();
+
+  expect(exit).toHaveBeenCalledWith(1);
+  expect(error.mock.calls[0]?.[0]).toContain("WORKFLOW_POSTGRES_DEPLOYMENT_ID is set");
 });
 
 test.each([

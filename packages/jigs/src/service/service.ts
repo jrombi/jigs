@@ -6,7 +6,9 @@
 
 import {
   configuredDeploymentVersion,
-  WORLD_DEPLOYMENT_VARIABLE,
+  configuredJobPrefix,
+  deploymentJobPrefix,
+  WORLD_JOB_PREFIX_VARIABLE,
 } from "../config/deployment-version.ts";
 import { resolveService } from "../config/factory-config.ts";
 import { currentFactoryContext, seedFactoryContext } from "../config/factory-context.ts";
@@ -51,10 +53,14 @@ export function listenOnServicePort(): void {
  */
 export function pinDeploymentVersion(): void {
   try {
-    const version = configuredDeploymentVersion(currentFactoryContext());
+    const ctx = currentFactoryContext();
+    const version = configuredDeploymentVersion(ctx);
+    const basePrefix = configuredJobPrefix(ctx);
+    // A per-version job prefix rather than the World's deployment id: runs keep
+    // one deployment, so any version can replay them (ADR 0019).
     // biome-ignore lint/style/noProcessEnv: the SDK's own setting, derived from the factory's
-    process.env[WORLD_DEPLOYMENT_VARIABLE] = version;
-    setDeploymentVersion(version);
+    process.env[WORLD_JOB_PREFIX_VARIABLE] = deploymentJobPrefix(basePrefix, version);
+    setDeploymentVersion(version, basePrefix);
   } catch (err) {
     if (!(err instanceof JigsError)) throw err;
     console.error(`[service] ${err.message}${err.hint === undefined ? "" : `\n${err.hint}`}`);

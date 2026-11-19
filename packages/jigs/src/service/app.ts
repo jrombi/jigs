@@ -8,7 +8,6 @@ import { getRun } from "workflow/api";
 import { getWorld } from "workflow/runtime";
 import { z } from "zod";
 import { doctorChecks, failedChecks, runDoctorChecks } from "../checks/index.ts";
-import { configuredJobPrefix } from "../config/deployment-version.ts";
 import { dashboardAddress } from "../config/factory-config.ts";
 import {
   currentFactoryContext,
@@ -29,7 +28,12 @@ import { listTriggers, triggerChecks, triggerInstallations } from "./event-trigg
 import { startRun } from "./launch.ts";
 import { listRunDeadJobs } from "./queue.ts";
 import { bootPhase, isReady } from "./readiness.ts";
-import { currentVersion, deploymentVersion, serviceRole } from "./role-state.ts";
+import {
+  currentVersion,
+  deploymentBasePrefix,
+  deploymentVersion,
+  serviceRole,
+} from "./role-state.ts";
 import {
   listRunSteps,
   listRuns,
@@ -110,11 +114,7 @@ export function createApp(factory: Factory, deps: Partial<AppDeps> = {}): Reques
   app.get("/api/deployments", async (_request, response) =>
     response.json({
       version: deploymentVersion() ?? null,
-      deployments: await listDeployments(
-        registry(),
-        context().slug,
-        configuredJobPrefix(context()),
-      ),
+      deployments: await listDeployments(registry(), context().slug, deploymentBasePrefix()),
     }),
   );
 

@@ -115,28 +115,25 @@ export interface HandOverDeps {
   db: RegistrySql;
   factory: string;
   jobPrefix: string;
-  /** Whether the run's workflow keeps its runs on the version that started them. */
-  pinned: (workflowId: string) => boolean;
   log: (line: string) => void;
 }
 
 export interface HandOverReport {
   moved: string[];
-  pinned: string[];
   /** Runs the target build cannot run, with what it lacks. */
   stranded: Array<{ runId: string; missing: string[] }>;
 }
 
 /**
- * Hand every parked run of `from` to the version `to`, skipping pinned workflows and runs whose
- * IDs `to`'s build has not published.
+ * Hand every parked run of `from` to the version `to`, skipping runs whose IDs `to`'s build has
+ * not published.
  */
 export async function handOverParkedRuns(
   deps: HandOverDeps,
   from: RunOwner,
   to: string,
 ): Promise<HandOverReport> {
-  const report: HandOverReport = { moved: [], pinned: [], stranded: [] };
+  const report: HandOverReport = { moved: [], stranded: [] };
   const runs = await parkedRuns(deps.db, from);
   if (runs.length === 0) return report;
   const ids = await publishedIds(deps.db, deps.factory, to);
@@ -148,10 +145,6 @@ export async function handOverParkedRuns(
   }
   const built = new Set(ids);
   for (const run of runs) {
-    if (deps.pinned(run.workflowId)) {
-      report.pinned.push(run.runId);
-      continue;
-    }
     const missing = missingIds(run, built);
     if (missing.length > 0) {
       report.stranded.push({ runId: run.runId, missing });
@@ -242,24 +235,20 @@ export async function adoptRun(
 
 /**
  * Adopt every live run of `from`, a version with no process or no version at all, into `to`,
- * with the same pinned-workflow and published-ID checks as a hand-over.
+ * with the same published-ID check as a hand-over.
  */
 export async function adoptRuns(
   deps: HandOverDeps,
   from: RunOwner,
   to: string,
 ): Promise<HandOverReport> {
-  const report: HandOverReport = { moved: [], pinned: [], stranded: [] };
+  const report: HandOverReport = { moved: [], stranded: [] };
   const runs = await liveRuns(deps.db, from);
   if (runs.length === 0) return report;
   const ids = await publishedIds(deps.db, deps.factory, to);
   if (ids === null) return report;
   const built = new Set(ids);
   for (const run of runs) {
-    if (deps.pinned(run.workflowId)) {
-      report.pinned.push(run.runId);
-      continue;
-    }
     const missing = missingIds(run, built);
     if (missing.length > 0) {
       report.stranded.push({ runId: run.runId, missing });
@@ -277,8 +266,8 @@ export async function adoptRuns(
 
 /**
  * Move every waiting job for a run `owner` drives from another version's flows task to its own,
- * and return how many moved. A message for a run goes to its home's task, which after a
- * hand-over is not its owner's; a job some worker already locked is left to that worker.
+ * and return how many moved. A message for a run goes to its sender's task, which need not be the
+ * owner's; a job some worker already locked is left to that worker.
  */
 export async function forwardOwnedJobs(db: RegistrySql, owner: RunOwner): Promise<number> {
   const [ownFlows] = deploymentTasks(owner.jobPrefix, owner.version);

@@ -261,7 +261,7 @@ test("health outside a factory reports a null root rather than failing liveness"
 });
 
 test("GET /api/deployments lists the versions the registry holds, with this copy's own", async () => {
-  setDeploymentVersion("v2");
+  setDeploymentVersion("v2", "workflow_");
   const views = [
     {
       version: "v2",
@@ -283,7 +283,7 @@ test("GET /api/deployments lists the versions the registry holds, with this copy
 });
 
 test("a draining copy answers 503 on every route but its liveness, which names both versions", async () => {
-  setDeploymentVersion("v1");
+  setDeploymentVersion("v1", "workflow_");
   setServiceRole("draining", "v2");
 
   const health = await app.request("/health");

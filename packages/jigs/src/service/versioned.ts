@@ -3,7 +3,6 @@
 // and relay live-turn messages between copies.
 
 import { hostname } from "node:os";
-import { configuredJobPrefix } from "../config/deployment-version.ts";
 import { currentFactoryContext, type FactoryContext } from "../config/factory-context.ts";
 import { hubConnection } from "../providers/hub.ts";
 import { registrySql } from "../steps/runtime/registry.ts";
@@ -34,7 +33,12 @@ import { startLiveTurnRelay } from "./live-turn-relay.ts";
 import { whenReady } from "./readiness.ts";
 import { registryListener } from "./registry-listener.ts";
 import { type RoleParts, startRoleController } from "./role.ts";
-import { deploymentVersion, type ServiceRole, setServiceRole } from "./role-state.ts";
+import {
+  deploymentBasePrefix,
+  deploymentVersion,
+  type ServiceRole,
+  setServiceRole,
+} from "./role-state.ts";
 import { startSchedules } from "./schedules.ts";
 import { beginShutdown, onShutdown } from "./shutdown.ts";
 
@@ -52,7 +56,9 @@ export async function runAsVersion(factory: Factory, live: Factory): Promise<voi
   await whenReady();
   const ctx = currentFactoryContext();
   const version = deploymentVersion();
-  if (version === undefined) throw new Error("the deployment version was not pinned before boot");
+  const jobPrefix = deploymentBasePrefix();
+  if (version === undefined || jobPrefix === undefined)
+    throw new Error("the deployment version was not pinned before boot");
   const db = registrySql();
   const { slug } = ctx;
   await recordDeploymentBoot(db, slug, version, {
@@ -73,7 +79,6 @@ export async function runAsVersion(factory: Factory, live: Factory): Promise<voi
   const relay = startLiveTurnRelay({ listener, db: registrySql, factory: slug });
   onShutdown(() => relay.stop(), { phase: "quiesce" });
 
-  const jobPrefix = configuredJobPrefix(ctx);
   const own = { version, jobPrefix };
   const forwarding = startJobForwarding({
     listener,
@@ -83,7 +88,6 @@ export async function runAsVersion(factory: Factory, live: Factory): Promise<voi
   });
   onShutdown(() => forwarding.stop(), { phase: "quiesce" });
 
-  const pinned = pinnedWorkflows(factory);
   const controller = startRoleController({
     version,
     currentVersion: () => currentDeployment(db, slug),
@@ -94,7 +98,7 @@ export async function runAsVersion(factory: Factory, live: Factory): Promise<voi
       }),
     startFull: () => startFullRole(factory, live, ctx),
     housekeep: async (role, current) => {
-      const deps = { db, factory: slug, jobPrefix, pinned, log: console.log };
+      const deps = { db, factory: slug, jobPrefix, log: console.log };
       if (role === "current") {
         await adoptAbandonedRuns(deps, version);
         return { owned: 0, queued: 0 };
@@ -122,17 +126,6 @@ async function adoptAbandonedRuns(
   for (const view of gone)
     await adoptRuns(deps, { version: view.version, jobPrefix: deps.jobPrefix }, version);
   await adoptRuns(deps, { version: null, jobPrefix: deps.jobPrefix }, version);
-}
-
-// The run's `name` is the compiled workflow ID; the definition is found through it.
-function pinnedWorkflows(factory: Factory): (workflowId: string) => boolean {
-  const pinnedIds = new Set(
-    Object.values(factory.workflows).flatMap((entry) => {
-      const id = (entry.workflow as { workflowId?: string }).workflowId;
-      return entry.versioning === "pinned" && id !== undefined ? [id] : [];
-    }),
-  );
-  return (workflowId) => pinnedIds.has(workflowId);
 }
 
 // Everything only the factory does: hearing the hub, firing triggers and

@@ -258,9 +258,7 @@ Use `jigs up` after changing workflow code or configuration:
   the command refuses, so retry when those steps finish.
 - The service `up` starts runs as a new [version](#versions), named after the
   bundle it built, and `up` makes it current once it is ready. The runs the
-  stopped version left behind are adopted by the new one within a minute,
-  except runs of a workflow that is [pinned](/guide/concepts#versions): those
-  wait for their version to run again, or for `jigs cancel`.
+  stopped version left behind are adopted by the new one within a minute.
 - A failed step prints `FAIL <step>` and a repair. Fix it, then run `up` again.
 
 ## Upgrading jigs

@@ -162,28 +162,6 @@ platform or a systemd unit treats it as the end of that task.
 A version whose process is gone, after a crash or a `jigs up` restart, has its
 runs adopted by the current version within a minute, queued work included.
 
-Each workflow chooses with `versioning` in `defineWorkflow`:
-
-```ts
-import { defineWorkflow, type WorkflowInputs } from "@jigs-ai/jigs";
-import { z } from "zod";
-
-const inputs = z.object({ ticket: z.string() });
-
-export async function review(input: WorkflowInputs<typeof inputs>) {
-  "use workflow";
-  return input.ticket;
-}
-
-export default defineWorkflow({ inputs, workflow: review, versioning: "pinned" });
-```
-
-- `auto-upgrade`, the default: a parked run follows the current version, as
-  above.
-- `pinned`: every run stays on the version that started it until the run ends,
-  so a long agent run finishes on the code it began with. That version keeps
-  running until then, and `jigs deployments` shows how many runs it still owns.
-
 A reply or a Stop in a Linear agent session reaches an agent's running turn
 whichever version runs it: the current version receives the event and relays
 it through the factory's database to the copy holding the turn.

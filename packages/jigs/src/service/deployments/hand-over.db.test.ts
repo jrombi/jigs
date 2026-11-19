@@ -1,7 +1,6 @@
-// A real run on the Postgres World, parked, handed from one version to another
-// while it keeps the deployment it started on, and a wake addressed elsewhere
-// forwarded to the new owner's task; then adopted from a version with no
-// process, queued job and all.
+// A real run on the Postgres World of version v1, parked, handed to another
+// version, and a wake sent by another process forwarded to the new owner's
+// task; then adopted from a version with no process, queued job and all.
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -56,7 +55,7 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   oldBaseUrl = process.env.WORKFLOW_LOCAL_BASE_URL;
   process.env.WORKFLOW_LOCAL_BASE_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  world = createWorld({ connectionString: url, queueConcurrency: 1, deploymentId: "v1" });
+  world = createWorld({ connectionString: url, queueConcurrency: 1, jobPrefix: "workflow_v1_" });
   setWorld(world);
   await world.start();
   db = connectRegistry(url, { max: 2 });
@@ -107,15 +106,18 @@ const untilParked = async (runId: string) => {
 
 let runId: string;
 
-dbTest("a run the World pins to v1 is parked once its start delivery is acknowledged", async () => {
-  const run = await start({ workflowId: WORKFLOW }, [{ page: "P1", triggerId: "manual" }]);
-  runId = run.runId;
-  expect(await runRow(runId)).toEqual({ deployment_id: "v1", job_prefix: "workflow_v1_" });
+dbTest(
+  "a run v1's World starts is owned by v1 and parked once its start delivery is acknowledged",
+  async () => {
+    const run = await start({ workflowId: WORKFLOW }, [{ page: "P1", triggerId: "manual" }]);
+    runId = run.runId;
+    expect(await runRow(runId)).toEqual({ deployment_id: "postgres", job_prefix: "workflow_v1_" });
 
-  await untilParked(runId);
-  expect(await ownedRunCount(db, v1)).toBe(1);
-  expect(await parkedRuns(db, v1)).toMatchObject([{ runId, workflowId: WORKFLOW, stepIds: [] }]);
-});
+    await untilParked(runId);
+    expect(await ownedRunCount(db, v1)).toBe(1);
+    expect(await parkedRuns(db, v1)).toMatchObject([{ runId, workflowId: WORKFLOW, stepIds: [] }]);
+  },
+);
 
 dbTest(
   "a run driven by a delivery lease is not parked, and is again once the lease is released",
@@ -144,22 +146,12 @@ dbTest(
 );
 
 dbTest(
-  "the hand-over waits for the target's published IDs, skips pinned workflows and runs the target lacks",
+  "the hand-over waits for the target's published IDs and skips runs the target lacks",
   async () => {
     const lines: string[] = [];
-    const deps = {
-      db,
-      factory: "factory-a",
-      jobPrefix: PREFIX,
-      pinned: () => false,
-      log: (l: string) => lines.push(l),
-    };
+    const deps = { db, factory: "factory-a", jobPrefix: PREFIX, log: (l: string) => lines.push(l) };
 
-    expect(await handOverParkedRuns(deps, v1, "v2")).toEqual({
-      moved: [],
-      pinned: [],
-      stranded: [],
-    });
+    expect(await handOverParkedRuns(deps, v1, "v2")).toEqual({ moved: [], stranded: [] });
     expect(lines[0]).toContain("has not published its IDs yet");
 
     await recordDeploymentBoot(db, "factory-a", "v2", {
@@ -171,33 +163,28 @@ dbTest(
       { runId, missing: [WORKFLOW] },
     ]);
 
-    await recordDeploymentBoot(db, "factory-a", "v2", { pid: 1, host: "h", ids: [WORKFLOW] });
-    expect((await handOverParkedRuns({ ...deps, pinned: () => true }, v1, "v2")).pinned).toEqual([
-      runId,
-    ]);
-    expect(await runRow(runId)).toMatchObject({ deployment_id: "v1" });
+    expect(await runRow(runId)).toMatchObject({ job_prefix: "workflow_v1_" });
   },
 );
 
 dbTest(
   "a handed-over run keeps its deployment, and a wake for it is forwarded to the new owner's task",
   async () => {
-    const deps = {
-      db,
-      factory: "factory-a",
-      jobPrefix: PREFIX,
-      pinned: () => false,
-      log: () => {},
-    };
+    await recordDeploymentBoot(db, "factory-a", "v2", { pid: 1, host: "h", ids: [WORKFLOW] });
+    const deps = { db, factory: "factory-a", jobPrefix: PREFIX, log: () => {} };
     expect((await handOverParkedRuns(deps, v1, "v2")).moved).toEqual([runId]);
     // The SDK seeds a run's replay with its deployment, so only the owner changes.
-    expect(await runRow(runId)).toEqual({ deployment_id: "v1", job_prefix: "workflow_v2_" });
+    expect(await runRow(runId)).toEqual({ deployment_id: "postgres", job_prefix: "workflow_v2_" });
     expect(await ownedRunCount(db, v1)).toBe(0);
     expect(await ownedRunCount(db, v2)).toBe(1);
 
-    // A wake addressed at a version with no worker, as one for v1 is once v1 has exited.
-    await world.queue(`__wkf_workflow_${WORKFLOW}`, { runId }, { deploymentId: "v0" });
-    expect(await jobsFor(runId)).toEqual([{ task: "workflow_v0_flows", locked_by: null }]);
+    // A wake sent by a process with no version, such as a script resuming a hook.
+    await db.$client.query(
+      `select graphile_worker.add_job('workflow_flows',
+         json_build_object('data', encode(convert_to($1, 'UTF8'), 'base64')))`,
+      [JSON.stringify({ runId })],
+    );
+    expect(await jobsFor(runId)).toEqual([{ task: "workflow_flows", locked_by: null }]);
     expect(await forwardOwnedJobs(db, v1)).toBe(0);
     expect(await forwardOwnedJobs(db, v2)).toBe(1);
     expect(await jobsFor(runId)).toEqual([{ task: "workflow_v2_flows", locked_by: null }]);
@@ -215,7 +202,7 @@ dbTest(
       "update graphile_worker._private_jobs set locked_at = now(), locked_by = 'dead-worker'",
     );
     expect(await adoptRun(db, { runId }, v2, v3)).toBe(true);
-    expect(await runRow(runId)).toEqual({ deployment_id: "v1", job_prefix: "workflow_v3_" });
+    expect(await runRow(runId)).toEqual({ deployment_id: "postgres", job_prefix: "workflow_v3_" });
     expect(await jobsFor(runId)).toEqual([{ task: "workflow_v3_flows", locked_by: null }]);
     expect(await queuedJobCount(db, v3)).toBe(1);
     expect(await adoptRun(db, { runId }, v2, v3)).toBe(false);
@@ -228,10 +215,10 @@ dbTest("runs of a copy with no version are adopted too", async () => {
   ]);
   await recordDeploymentBoot(db, "factory-a", "v3", { pid: 1, host: "h", ids: [WORKFLOW] });
   const report = await adoptRuns(
-    { db, factory: "factory-a", jobPrefix: PREFIX, pinned: () => false, log: () => {} },
+    { db, factory: "factory-a", jobPrefix: PREFIX, log: () => {} },
     { version: null, jobPrefix: PREFIX },
     "v3",
   );
   expect(report.moved).toEqual([runId]);
-  expect(await runRow(runId)).toEqual({ deployment_id: "v1", job_prefix: "workflow_v3_" });
+  expect(await runRow(runId)).toEqual({ deployment_id: "postgres", job_prefix: "workflow_v3_" });
 });

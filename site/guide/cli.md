@@ -219,7 +219,7 @@ keeps only its queue worker, finishes the runs it started, and exits with code
 
 | Command | What it does |
 | --- | --- |
-| `jigs deployments` | List every version that has run: its role (`current`, `draining`, or `gone` when no process has reported for a minute), when it started, when it was last seen, the live runs it started, and its process. `--json` prints the same. |
+| `jigs deployments` | List every version that has run: its role (`current`, `draining`, or `gone` when no process has reported for five minutes), when it started, when it was last seen, the live runs it started, and its process. `--json` prints the same. |
 | `jigs deployments current <version>` | Make a version the factory. The one that was current drains. A hosted pipeline runs it once the new copy is healthy; a rollback is running it with the previous version. |
 | `jigs deployments prune` | Forget versions that are not current and have no running process. A version that still has live runs is kept, and the command says so. `--cancel-runs` cancels those runs first, through the current service, then forgets the version. |
 

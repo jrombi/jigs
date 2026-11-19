@@ -34,8 +34,11 @@ export type DeploymentRow = typeof deployments.$inferSelect;
 /** The Postgres channel `jigs deployments current` notifies on; the payload is the factory slug. */
 export const DEPLOYMENTS_CHANNEL = "jigs_deployments";
 
-/** How long after its last heartbeat a version's process still counts as running. */
-export const LIVE_WINDOW_MS = 60_000;
+/**
+ * How long after its last heartbeat a version's process still counts as running: long enough
+ * that a database blip does not show a live version as gone, where prune may forget it.
+ */
+export const LIVE_WINDOW_MS = 5 * 60_000;
 
 /** How often a running copy refreshes its heartbeat. */
 export const HEARTBEAT_MS = 15_000;

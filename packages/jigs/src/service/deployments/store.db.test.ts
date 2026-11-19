@@ -14,6 +14,7 @@ import {
   currentDeployment,
   DEPLOYMENTS_CHANNEL,
   drainingSince,
+  LIVE_WINDOW_MS,
   listDeployments,
   makeDeploymentCurrent,
   pruneDeployments,
@@ -70,7 +71,7 @@ dbTest(
       runs: 0,
     });
 
-    const later = new Date(Date.now() + 2 * 60_000);
+    const later = new Date(Date.now() + LIVE_WINDOW_MS + 60_000);
     expect((await listDeployments(db, FACTORY, undefined, later))[0]?.role).toBe("gone");
     await touchDeployment(db, FACTORY, "v1");
     expect((await listDeployments(db, FACTORY))[0]?.role).toBe("draining");
@@ -123,7 +124,7 @@ dbTest("the listing counts the live runs each version started", async () => {
 dbTest(
   "prune removes only versions that are gone and own nothing, never the current one",
   async () => {
-    const later = new Date(Date.now() + 2 * 60_000);
+    const later = new Date(Date.now() + LIVE_WINDOW_MS + 60_000);
     // v1: gone but owns runs. v2: current. v3: gone, owns nothing.
     expect(await pruneDeployments(db, FACTORY, undefined, later)).toEqual(["v3"]);
     expect((await listDeployments(db, FACTORY)).map((view) => view.version).sort()).toEqual([

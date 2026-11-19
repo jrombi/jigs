@@ -222,7 +222,31 @@ _Avoid_: credential root, factory root (for the whole of it)
 checkout, a git worktree or a server. Every copy runs the same
 `jigs.config.ts`; its environment sets its ports, compose project, World, hub
 token and which triggers and schedules are active.
-_Avoid_: instance, environment (for the checkout), deployment
+_Avoid_: instance, environment (for the checkout), deployment (for the checkout;
+a deployment is a version)
+
+**Version**: The build a hosted copy runs, named by its `JIGS_DEPLOYMENT_VERSION`,
+such as an image tag; the World's deployment id. A copy runs one version; a copy
+with none, such as the one `jigs up` runs, is the factory's only copy and has no
+role. Each run finishes on the version that started it. `jigs deployments` and
+the `jigs_deployments` table name versions "deployments".
+_Avoid_: release, build, instance
+
+**Current**: The one version that is the factory: it hears the hub, fires
+triggers and schedules, releases and serves the dashboard and the API. Only
+`jigs deployments current` changes it.
+
+**Draining**: The role of a running version that is not current: it keeps only
+its queue worker, finishes the runs it started, and exits once it owns none, if
+it was ever current.
+_Avoid_: retiring, standby
+
+**Gone**: A version that is not current and whose process has not reported for
+five minutes. Its runs wait for it to run again.
+_Avoid_: dead, stale
+
+**Drain cap**: `deployments.maxDrainDays`, how long after it stopped being
+current a draining version keeps its runs before it cancels them and exits.
 
 **World**: The Workflow SDK's persistence and queue backend; one Postgres per
 factory.

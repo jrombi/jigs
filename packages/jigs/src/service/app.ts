@@ -83,7 +83,7 @@ export function createApp(factory: Factory, deps: Partial<AppDeps> = {}): Reques
   app.get("/health", (_request, response) =>
     response.json({
       ok: true,
-      ready: isReady(),
+      ready: readyToServe(),
       phase: bootPhase(),
       world: processEnv().WORKFLOW_TARGET_WORLD ?? "local (default)",
       factoryRoot: factoryRootOrNull(context),
@@ -399,6 +399,13 @@ async function heldTokens(world: AppDeps["world"], runId: string): Promise<strin
 
 // Why this copy refuses the API, or undefined while it serves it. A copy with
 // no deployment version is the factory's only copy and always serves.
+// A versioned copy is ready once it has recorded its boot and read the current version, so a
+// deploy that waits on `ready` can make it current straight away.
+function readyToServe(): boolean {
+  if (!isReady()) return false;
+  return deploymentVersion() === undefined || serviceRole() !== undefined;
+}
+
 function whyNotServing(): string | undefined {
   const version = deploymentVersion();
   if (version === undefined) return undefined;

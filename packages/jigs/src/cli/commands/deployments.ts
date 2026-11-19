@@ -50,8 +50,8 @@ async function withRegistry<T>(
   const registry = await loadRegistryModules();
   const sql = connectToRegistry(url, deps, registry);
   try {
-    // A pipeline may make a version current before any copy has booted and
-    // created the tables; the migration is idempotent.
+    // `deployments list` and `current --force` may run before any copy has
+    // booted and created the tables; the migration is idempotent.
     if (deps.connect === undefined) await registry.ensureRegistry(sql);
     return await action({ sql, factory: ctx.slug, jobPrefix: configuredJobPrefix(ctx), registry });
   } finally {

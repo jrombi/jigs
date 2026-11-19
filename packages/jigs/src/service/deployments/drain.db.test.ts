@@ -145,6 +145,22 @@ const useUpAttempts = (key: string) =>
     [key],
   );
 
+const removeJob = (key: string) =>
+  db.$client.query("delete from graphile_worker._private_jobs where key = $1", [key]);
+
+const lockOnLastAttempt = (key: string) =>
+  db.$client.query(
+    "update graphile_worker._private_jobs set attempts = max_attempts, locked_at = now(), locked_by = 'test' where key = $1",
+    [key],
+  );
+
+dbTest("a job running its last attempt holds a drain", async () => {
+  await addV2Job("v2-last-attempt", new Date());
+  await lockOnLastAttempt("v2-last-attempt");
+  expect(await queuedJobCount(db, v2)).toBe(1);
+  await removeJob("v2-last-attempt");
+});
+
 dbTest("a timer due later and a job with no attempts left do not hold a drain", async () => {
   await addV2Job("v2-sleep-wake-up", new Date(Date.now() + 86_400_000));
   await addV2Job("v2-dead", new Date());

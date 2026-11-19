@@ -16,6 +16,7 @@ import { ticketToken } from "../workflow/linear/ticket-token.ts";
 import { pullRequestToken } from "../workflow/pull-requests/pull-request.ts";
 import * as deploymentStore from "./deployments/store.ts";
 import * as queue from "./queue.ts";
+import { READY_PHASE, setBootPhase } from "./readiness.ts";
 import { resetRoleState, setDeploymentVersion, setServiceRole } from "./role-state.ts";
 import { appClient } from "./test-fixtures.ts";
 import { clearWakes, lastWake } from "./wake.ts";
@@ -318,6 +319,22 @@ test("a versioned copy that has not read its role yet refuses the API but answer
     version: "v1",
     currentVersion: null,
   });
+});
+
+test("a booted versioned copy reports ready only once it has read its role", async () => {
+  setBootPhase(READY_PHASE);
+  try {
+    setDeploymentVersion("v2", "workflow_");
+    expect(await (await app.request("/health")).json()).toMatchObject({ ready: false, role: null });
+
+    setServiceRole("draining", "v1");
+    expect(await (await app.request("/health")).json()).toMatchObject({
+      ready: true,
+      role: "draining",
+    });
+  } finally {
+    setBootPhase("starting");
+  }
 });
 
 test("a versioned copy serves the API once it is current", async () => {

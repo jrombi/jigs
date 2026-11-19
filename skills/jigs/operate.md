@@ -213,7 +213,7 @@ version set by `JIGS_DEPLOYMENT_VERSION`; one is current: the factory. A laptop
 copy from `jigs up` has no version and none of this applies. `jigs deployments`
 lists the versions with their role (`current`, `draining`, `gone`) and the live
 runs each started. The deploy runs `jigs deployments current <version>` once the
-new copy is healthy; a rollback starts the previous version first, then runs
+new copy's `/health` says `ready`; a rollback starts the previous version first, then runs
 it with that version, since the command refuses a version with no running
 process. A run stays on the version that started it: a draining version finishes its own runs
 and exits on its own, and after `deployments.maxDrainDays` (14 by default)

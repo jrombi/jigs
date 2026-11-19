@@ -40,17 +40,17 @@ export async function ownedRunCount(db: RegistrySql, owner: DeploymentOwner): Pr
 }
 
 /**
- * Jobs on `owner`'s tasks that can still do work: due now or being worked on, with attempts left.
+ * Jobs on `owner`'s tasks that can still do work: being worked on, or due now with attempts left.
  */
 export async function queuedJobCount(db: RegistrySql, owner: DeploymentOwner): Promise<number> {
   const tasks = deploymentTasks(owner.jobPrefix, owner.version);
   // An ended run leaves its timers (a sleep's wake-up, up to a day out) and Graphile keeps a job
   // with no attempts left; a job due later matters only while its run is live, as ownedRunCount counts.
+  // Graphile counts the attempt on locking, so a job on its last attempt is held only by its lock.
   const { rows } = await db.execute<{ count: number }>(sql`
     select count(*)::int as count from graphile_worker.jobs j
     where j.task_identifier = any(${sql.param(tasks)}::text[])
-      and j.attempts < j.max_attempts
-      and (j.locked_at is not null or j.run_at <= now())
+      and (j.locked_at is not null or (j.attempts < j.max_attempts and j.run_at <= now()))
   `);
   return rows[0]?.count ?? 0;
 }

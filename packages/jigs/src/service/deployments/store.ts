@@ -2,8 +2,8 @@
 // is one deployment version; `current` marks the one that is the factory,
 // written only by `jigs deployments current`.
 
-import { and, eq, sql } from "drizzle-orm";
-import { boolean, integer, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import { and, eq, ne, sql } from "drizzle-orm";
+import { boolean, integer, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 import { DEFAULT_JOB_PREFIX, deploymentJobPrefix } from "../../config/deployment-version.ts";
 import type { RegistrySql } from "../../steps/runtime/registry.ts";
 
@@ -18,11 +18,11 @@ export const deployments = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     pid: integer("pid"),
     host: text("host"),
-    // Every workflow and step ID the version's build has, so another version
-    // can check a run fits before handing it over. Null until the copy boots.
-    ids: jsonb("ids").$type<string[]>(),
     current: boolean("current").notNull().default(false),
     madeCurrentAt: timestamp("made_current_at", { withTimezone: true }),
+    // When another version was last made current over this one: the start of
+    // its drain, which the drain cap counts from. Null while it is current.
+    supersededAt: timestamp("superseded_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -43,17 +43,16 @@ export const HEARTBEAT_MS = 15_000;
 export interface DeploymentProcess {
   pid: number;
   host: string;
-  ids: string[];
 }
 
-/** A copy of `version` has booted: start its clock, its heartbeat and publish its IDs. */
+/** A copy of `version` has booted: start its clock and its heartbeat. */
 export async function recordDeploymentBoot(
   db: RegistrySql,
   factory: string,
   version: string,
   process: DeploymentProcess,
 ): Promise<void> {
-  const seen = { lastSeenAt: sql`now()`, pid: process.pid, host: process.host, ids: process.ids };
+  const seen = { lastSeenAt: sql`now()`, pid: process.pid, host: process.host };
   await db
     .insert(deployments)
     .values({ factory, version, ...seen })
@@ -97,14 +96,21 @@ export async function makeDeploymentCurrent(
     const previous = await currentDeployment(tx as unknown as RegistrySql, factory);
     await tx
       .update(deployments)
-      .set({ current: false, updatedAt: sql`now()` })
-      .where(and(eq(deployments.factory, factory), eq(deployments.current, true)));
+      .set({ current: false, supersededAt: sql`now()`, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(deployments.factory, factory),
+          eq(deployments.current, true),
+          ne(deployments.version, version),
+        ),
+      );
+    const madeCurrent = { current: true, madeCurrentAt: sql`now()`, supersededAt: null };
     await tx
       .insert(deployments)
-      .values({ factory, version, current: true, madeCurrentAt: sql`now()` })
+      .values({ factory, version, ...madeCurrent })
       .onConflictDoUpdate({
         target: [deployments.factory, deployments.version],
-        set: { current: true, madeCurrentAt: sql`now()`, updatedAt: sql`now()` },
+        set: { ...madeCurrent, updatedAt: sql`now()` },
       });
     await tx.execute(sql`select pg_notify(${DEPLOYMENTS_CHANNEL}, ${factory})`);
     return previous;
@@ -124,17 +130,17 @@ export async function wasEverCurrent(
   return rows[0]?.madeCurrentAt != null;
 }
 
-/** The IDs the version's build published at boot, or null when no copy of it has booted. */
-export async function publishedIds(
+/** When `version` stopped being current, or null while it is current or never was. */
+export async function drainingSince(
   db: RegistrySql,
   factory: string,
   version: string,
-): Promise<string[] | null> {
+): Promise<Date | null> {
   const rows = await db
-    .select({ ids: deployments.ids })
+    .select({ supersededAt: deployments.supersededAt })
     .from(deployments)
     .where(and(eq(deployments.factory, factory), eq(deployments.version, version)));
-  return rows[0]?.ids ?? null;
+  return rows[0]?.supersededAt ?? null;
 }
 
 export type DeploymentRole = "current" | "draining" | "gone";
@@ -146,9 +152,10 @@ export interface DeploymentView {
   startedAt: string;
   lastSeenAt: string | null;
   madeCurrentAt: string | null;
+  supersededAt: string | null;
   pid: number | null;
   host: string | null;
-  /** The live runs this version drives. */
+  /** The live runs this version started; they finish on it. */
   runs: number;
 }
 
@@ -184,13 +191,14 @@ export async function listDeployments(
     startedAt: row.startedAt.toISOString(),
     lastSeenAt: row.lastSeenAt?.toISOString() ?? null,
     madeCurrentAt: row.madeCurrentAt?.toISOString() ?? null,
+    supersededAt: row.supersededAt?.toISOString() ?? null,
     pid: row.pid,
     host: row.host,
     runs: owned.get(deploymentJobPrefix(jobPrefix, row.version)) ?? 0,
   }));
 }
 
-// The World's own table: a run's `job_prefix` names the version that drives it.
+// The World's own table: a run's `job_prefix` names the deployment that started it.
 async function ownedRunCounts(db: RegistrySql): Promise<Map<string, number>> {
   const { rows } = await db.execute<{ jobPrefix: string; runs: number }>(sql`
     select job_prefix as "jobPrefix", count(*)::int as runs

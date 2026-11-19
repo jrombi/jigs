@@ -15,11 +15,7 @@ import {
   liveServicePid,
   type ServiceOutcome,
 } from "./service.ts";
-import {
-  builtBundleVersion,
-  type ServiceLifecycleDeps,
-  type ServiceProcesses,
-} from "./service-process.ts";
+import type { ServiceLifecycleDeps, ServiceProcesses } from "./service-process.ts";
 import { serviceLogPath } from "./service-record.ts";
 import { nested, type Step, StepFailed, stepRunner } from "./step-runner.ts";
 
@@ -39,7 +35,6 @@ export type UpStepName =
   | "build"
   | "service"
   | "ready"
-  | "current"
   | "doctor";
 
 export type UpStep = Step<UpStepName>;
@@ -59,8 +54,6 @@ export interface UpDeps {
   processes?: ServiceProcesses;
   prepare?: Prepare;
   migrate?: (url: string) => Promise<void>;
-  /** Make `version` the factory's current version in the World at `url`; answers the previous one. */
-  makeCurrent?: (url: string, factory: string, version: string) => Promise<string | null>;
   runsInFlight?: (worldUrl: string) => Promise<InFlightRun[]>;
   confirm?: (question: string) => Promise<boolean>;
   readyTimeoutMs?: number;
@@ -136,16 +129,6 @@ export async function upFactory(deps: UpDeps, options: UpOptions = {}): Promise<
 
     await runner.run("ready", () => awaitServiceReady(lifecycle));
 
-    // The copy just started is the factory on a laptop (ADR 0019): making it
-    // current is what lets it hear the hub and fire its triggers.
-    await runner.run("current", async (note) => {
-      const version = builtBundleVersion(factoryRoot);
-      if (version === undefined) throw new JigsError(`no built service in ${factoryRoot}`);
-      const makeCurrent = deps.makeCurrent ?? makeDeploymentCurrent;
-      const previous = await makeCurrent(worldUrl, ctx.slug, version);
-      note(previous === null || previous === version ? version : `${version}, was ${previous}`);
-    });
-
     if (options.doctor === false) {
       runner.skip("doctor", "--no-doctor");
     } else {
@@ -170,23 +153,6 @@ export async function upFactory(deps: UpDeps, options: UpOptions = {}): Promise<
   } catch (err) {
     if (err instanceof StepFailed) return result;
     throw err;
-  }
-}
-
-async function makeDeploymentCurrent(
-  url: string,
-  factory: string,
-  version: string,
-): Promise<string | null> {
-  const [{ connectRegistry }, store] = await Promise.all([
-    import("../../steps/runtime/registry.ts"),
-    import("../../service/deployments/store.ts"),
-  ]);
-  const sql = connectRegistry(url, { max: 1 });
-  try {
-    return await store.makeDeploymentCurrent(sql, factory, version);
-  } finally {
-    await sql.$client.end();
   }
 }
 

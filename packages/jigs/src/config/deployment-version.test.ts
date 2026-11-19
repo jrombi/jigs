@@ -28,12 +28,24 @@ test("a longer job prefix leaves less room for the version", () => {
   expect(validateDeploymentVersion("x".repeat(76), "acme_")).toHaveLength(76);
 });
 
-test("the version comes from JIGS_DEPLOYMENT_VERSION, and its absence names the variable", () => {
+test("the version comes from JIGS_DEPLOYMENT_VERSION, and a copy without one has none", () => {
   expect(
     configuredDeploymentVersion(testFactoryContext({ env: { JIGS_DEPLOYMENT_VERSION: "v7" } })),
   ).toBe("v7");
-  expect(() => configuredDeploymentVersion(testFactoryContext({ env: {} }))).toThrow(
-    "JIGS_DEPLOYMENT_VERSION is not set",
+  expect(configuredDeploymentVersion(testFactoryContext({ env: {} }))).toBeUndefined();
+});
+
+test("a World deployment id other than the version is refused", () => {
+  const configured = (env: Record<string, string>) =>
+    configuredDeploymentVersion(testFactoryContext({ env }));
+  expect(() => configured({ WORKFLOW_POSTGRES_DEPLOYMENT_ID: "v7" })).toThrow(
+    'WORKFLOW_POSTGRES_DEPLOYMENT_ID is set to "v7"',
+  );
+  expect(() =>
+    configured({ JIGS_DEPLOYMENT_VERSION: "v8", WORKFLOW_POSTGRES_DEPLOYMENT_ID: "v7" }),
+  ).toThrow('WORKFLOW_POSTGRES_DEPLOYMENT_ID is set to "v7"');
+  expect(configured({ JIGS_DEPLOYMENT_VERSION: "v7", WORKFLOW_POSTGRES_DEPLOYMENT_ID: "v7" })).toBe(
+    "v7",
   );
 });
 
@@ -43,5 +55,4 @@ test("a version's job prefix and tasks follow the World's naming", () => {
     "workflow_v7_flows",
     "workflow_v7_flows_executor",
   ]);
-  expect(deploymentTasks("workflow_", null)).toEqual(["workflow_flows", "workflow_flows_executor"]);
 });

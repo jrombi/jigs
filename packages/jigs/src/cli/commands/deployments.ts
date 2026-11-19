@@ -5,6 +5,7 @@ import { FACTORY_ENVIRONMENT } from "../../providers/credentials.ts";
 import type { DeploymentView } from "../../service/deployments/store.ts";
 import type { RegistrySql } from "../../steps/runtime/registry.ts";
 import { detail, formatTable, hint, layout, note } from "../output.ts";
+import { cancelRun } from "./cancel.ts";
 import { age } from "./run-list.ts";
 
 // The versions of this factory as the registry records them, read from the
@@ -21,6 +22,7 @@ export interface DeploymentsDeps {
 const modules = async () => ({
   ...(await import("../../steps/runtime/registry.ts")),
   ...(await import("../../service/deployments/store.ts")),
+  ...(await import("../../service/deployments/drain.ts")),
 });
 
 async function withRegistry<T>(
@@ -101,18 +103,59 @@ export async function makeCurrent(version: string, deps: DeploymentsDeps): Promi
   deps.out(`version ${version} is now current ${was}`);
   if (previous !== null && previous !== version)
     deps.out(
-      note(`version ${previous} drains: it hands its parked runs over and exits once it owns none`),
+      note(
+        `version ${previous} drains: it finishes the runs it started and exits once it owns none`,
+      ),
     );
 }
 
-/** `jigs deployments prune`: forget versions with no process and no runs. */
-export async function pruneDeployments(deps: DeploymentsDeps): Promise<string[]> {
+export interface PruneDeps extends DeploymentsDeps {
+  /** Where `--cancel-runs` cancels a run: the current version's service. */
+  serviceUrl: string;
+  cancel?: (runId: string) => Promise<void>;
+}
+
+/**
+ * `jigs deployments prune`: forget versions with no process and no runs. A version with no
+ * process that still owns runs is kept, since its runs finish only on it, unless `cancelRuns`
+ * cancels them first.
+ */
+export async function pruneDeployments(
+  deps: PruneDeps,
+  options: { cancelRuns?: boolean } = {},
+): Promise<string[]> {
   const now = deps.now ?? (() => new Date());
-  const removed = await withRegistry(deps, (sql, factory, m) =>
-    m.pruneDeployments(sql, factory, configuredJobPrefix(currentFactoryContext()), now()),
-  );
-  if (removed.length === 0)
-    deps.out("nothing to prune: every version is current, running or owns runs");
+  const jobPrefix = configuredJobPrefix(currentFactoryContext());
+  const cancel =
+    deps.cancel ??
+    (async (runId: string) => {
+      await cancelRun(runId, { out: deps.out, serviceUrl: deps.serviceUrl, force: true });
+    });
+  const { removed, kept } = await withRegistry(deps, async (sql, factory, m) => {
+    const abandoned = (await m.listDeployments(sql, factory, jobPrefix, now())).filter(
+      (view) => view.role === "gone" && view.runs > 0,
+    );
+    if (options.cancelRuns === true) {
+      for (const view of abandoned)
+        for (const runId of await m.liveRunIds(sql, { version: view.version, jobPrefix }))
+          await cancel(runId);
+    }
+    return {
+      removed: await m.pruneDeployments(sql, factory, jobPrefix, now()),
+      kept: options.cancelRuns === true ? [] : abandoned,
+    };
+  });
   for (const version of removed) deps.out(`removed version ${version}`);
+  for (const view of kept)
+    deps.out(`kept version ${view.version}: it has no process and owns ${view.runs} live run(s)`);
+  if (kept.length > 0) {
+    for (const line of hint(
+      "start that version again to finish its runs, or cancel them and prune it:",
+      "pnpm exec jigs deployments prune --cancel-runs",
+    ))
+      deps.out(line);
+  } else if (removed.length === 0) {
+    deps.out("nothing to prune: every version is current or running");
+  }
   return removed;
 }

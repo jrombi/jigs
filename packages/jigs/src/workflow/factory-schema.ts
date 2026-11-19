@@ -123,6 +123,9 @@ const eventTriggerSchema: z.ZodType<EventTrigger, EventTrigger> = z.strictObject
   lookbackMinutes: z.number().optional(),
 });
 
+/** Days a version that is no longer current keeps its runs before it cancels them, when the factory does not say. */
+export const DEFAULT_MAX_DRAIN_DAYS = 14;
+
 // Strict so a misspelled section fails instead of falling back to defaults.
 export const factoryConfigSchema = z
   .strictObject({
@@ -134,6 +137,10 @@ export const factoryConfigSchema = z
     github: githubSchema.prefault({}),
     linear: linearSchema.prefault({}),
     release: releaseSchema.optional(),
+    // How long a version that is no longer current may take to finish its runs.
+    deployments: z
+      .strictObject({ maxDrainDays: z.number().positive().default(DEFAULT_MAX_DRAIN_DAYS) })
+      .prefault({}),
     // Service variables every agent harness receives beyond jigs' base set.
     agents: agentsSchema.prefault({}),
     // Deferred imports: calling one loads the workflow, which only the service does.

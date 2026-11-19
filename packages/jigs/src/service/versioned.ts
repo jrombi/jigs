@@ -1,6 +1,7 @@
-// Run this copy as a deployment version (ADR 0019): record its boot, keep its
-// heartbeat, follow the current version into the current or the draining role,
-// and relay live-turn messages between copies.
+// Run this copy as the factory: either as its only copy, or as a deployment
+// version (ADR 0019) that records its boot, keeps its heartbeat, follows the
+// current version into the current or the draining role, and relays
+// live-turn messages between copies.
 
 import { hostname } from "node:os";
 import { currentFactoryContext, type FactoryContext } from "../config/factory-context.ts";
@@ -8,21 +9,12 @@ import { hubConnection } from "../providers/hub.ts";
 import { registrySql } from "../steps/runtime/registry.ts";
 import type { Factory } from "../workflow/factory.ts";
 import { startAutomaticRelease } from "./automatic-release.ts";
-import { builtIds } from "./built-ids.ts";
 import { startDashboard } from "./dashboard.ts";
-import {
-  adoptRuns,
-  forwardOwnedJobs,
-  handOverParkedRuns,
-  ownedRunCount,
-  queuedJobCount,
-} from "./deployments/hand-over.ts";
-import { startJobForwarding } from "./deployments/job-forwarding.ts";
+import { drainPass } from "./deployments/drain.ts";
 import {
   currentDeployment,
   DEPLOYMENTS_CHANNEL,
   HEARTBEAT_MS,
-  listDeployments,
   recordDeploymentBoot,
   touchDeployment,
   wasEverCurrent,
@@ -39,6 +31,7 @@ import {
   type ServiceRole,
   setServiceRole,
 } from "./role-state.ts";
+import { cancelRun } from "./runs.ts";
 import { startSchedules } from "./schedules.ts";
 import { beginShutdown, onShutdown } from "./shutdown.ts";
 
@@ -47,6 +40,17 @@ const setTimer = (fire: () => void, ms: number) => {
   timer.unref?.();
   return () => clearTimeout(timer);
 };
+
+/**
+ * Once the World is ready, be the factory for as long as this copy runs: the copy has no
+ * deployment version, so no other copy shares its work. `live` is the factory with only its
+ * active triggers and schedules.
+ */
+export async function runAsOnlyCopy(factory: Factory, live: Factory): Promise<void> {
+  await whenReady();
+  const parts = await startFullRole(factory, live, currentFactoryContext());
+  onShutdown(() => parts.stop(), { phase: "quiesce" });
+}
 
 /**
  * Once the World is ready, take this copy's role and keep it. `live` is the factory with only
@@ -61,11 +65,7 @@ export async function runAsVersion(factory: Factory, live: Factory): Promise<voi
     throw new Error("the deployment version was not pinned before boot");
   const db = registrySql();
   const { slug } = ctx;
-  await recordDeploymentBoot(db, slug, version, {
-    pid: process.pid,
-    host: hostname(),
-    ids: builtIds(factory),
-  });
+  await recordDeploymentBoot(db, slug, version, { pid: process.pid, host: hostname() });
   const heartbeat = setInterval(() => {
     touchDeployment(db, slug, version).catch((error: unknown) => {
       console.error(`[service] heartbeat failed: ${String(error)}`);
@@ -79,15 +79,6 @@ export async function runAsVersion(factory: Factory, live: Factory): Promise<voi
   const relay = startLiveTurnRelay({ listener, db: registrySql, factory: slug });
   onShutdown(() => relay.stop(), { phase: "quiesce" });
 
-  const own = { version, jobPrefix };
-  const forwarding = startJobForwarding({
-    listener,
-    forward: () => forwardOwnedJobs(db, own),
-    setTimer,
-    log: console.log,
-  });
-  onShutdown(() => forwarding.stop(), { phase: "quiesce" });
-
   const controller = startRoleController({
     version,
     currentVersion: () => currentDeployment(db, slug),
@@ -97,35 +88,21 @@ export async function runAsVersion(factory: Factory, live: Factory): Promise<voi
         if (payload === slug) fire();
       }),
     startFull: () => startFullRole(factory, live, ctx),
-    housekeep: async (role, current) => {
-      const deps = { db, factory: slug, jobPrefix, log: console.log };
-      if (role === "current") {
-        await adoptAbandonedRuns(deps, version);
-        return { owned: 0, queued: 0 };
-      }
-      if (current !== null) await handOverParkedRuns(deps, own, current);
-      return { owned: await ownedRunCount(db, own), queued: await queuedJobCount(db, own) };
-    },
+    drain: () =>
+      drainPass({
+        db,
+        factory: slug,
+        owner: { version, jobPrefix },
+        maxDrainDays: ctx.config.deployments.maxDrainDays,
+        cancel: cancelRun,
+        log: console.log,
+      }),
     onRole: (role, current) => setServiceRole(role, current),
     exit: (reason) => beginShutdown(reason),
     setTimer,
     log: console.log,
   });
   onShutdown(() => controller.stop(), { phase: "quiesce" });
-}
-
-// A run of a version whose process is gone, or of a copy that had no version,
-// would otherwise wait for a worker that never comes.
-async function adoptAbandonedRuns(
-  deps: Parameters<typeof adoptRuns>[0],
-  version: string,
-): Promise<void> {
-  const gone = (await listDeployments(deps.db, deps.factory, deps.jobPrefix)).filter(
-    (view) => view.role === "gone" && view.runs > 0,
-  );
-  for (const view of gone)
-    await adoptRuns(deps, { version: view.version, jobPrefix: deps.jobPrefix }, version);
-  await adoptRuns(deps, { version: null, jobPrefix: deps.jobPrefix }, version);
 }
 
 // Everything only the factory does: hearing the hub, firing triggers and

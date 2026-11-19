@@ -81,8 +81,7 @@ pnpm exec jigs up
 `jigs up` prints one line per step: `locate`, `install`, `compose` (Postgres, its output streamed),
 `bootstrap` (migrations), `build`, `service` (start, or restart only when the
 built bundle or `jigs.config.ts` changed), `ready` (waits until the World is
-up), `current` (makes the started copy's version the factory's current one)
-and `doctor`. Doctor checks only what the
+up) and `doctor`. Doctor checks only what the
 workflows require and what `jigs.config.ts` turns on. The closing lines name
 what runs and the one command that stops it all:
 
@@ -117,11 +116,9 @@ is up.
 `jigs up` is also the command after every change to the factory's code.
 `--restart-service` forces a restart, which a change to the environment
 (`.env`, `.env.local`) needs; `--force` skips the question about
-runs with a step executing. Each start is a new deployment version named after
-the built bundle; the runs the previous one left parked are adopted within a
-minute. A copy started outside `jigs up`, such as a container, needs
-`JIGS_DEPLOYMENT_VERSION` in its environment and a
-`jigs deployments current <version>` once it is healthy; see
+runs with a step executing. A hosted copy that deploys beside the previous
+one, such as a container, needs `JIGS_DEPLOYMENT_VERSION` in its environment
+and a `jigs deployments current <version>` once it is healthy; see
 `https://salimhamed.github.io/jigs/guide/cli#versions`.
 
 Then:

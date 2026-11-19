@@ -208,19 +208,22 @@ it.
 
 ## Versions
 
-Each running copy of the factory is a deployment version, and one is current:
-the factory. `jigs deployments` lists them with their role (`current`,
-`draining`, `gone`) and the runs each still owns. On a laptop `jigs up` makes
-the copy it starts current; on a server the deploy runs
-`jigs deployments current <version>` once the new copy is healthy, and a
-rollback runs it with the previous version. A draining version finishes its
-executing steps, hands its parked runs to the current version and exits on its
-own; a version that still owns runs is still executing a step of them, or
-the current build lacks a workflow or step they recorded. Never make a version
-current on your own: that is the deploy's decision, or the human's. A command
-answered with 503 and a message naming a draining version was sent to the
-wrong copy; the current one is the service to talk to. `jigs deployments
-prune` only forgets versions with no process and no runs, and is safe to run.
+A hosted factory can run several copies while it deploys, each a deployment
+version set by `JIGS_DEPLOYMENT_VERSION`; one is current: the factory. A laptop
+copy from `jigs up` has no version and none of this applies. `jigs deployments`
+lists the versions with their role (`current`, `draining`, `gone`) and the live
+runs each started. The deploy runs `jigs deployments current <version>` once the
+new copy is healthy, and a rollback runs it with the previous version. A run
+stays on the version that started it: a draining version finishes its own runs
+and exits on its own, and after `deployments.maxDrainDays` (14 by default)
+without being current it cancels the runs left and exits. A `gone` version with
+runs crashed; its runs wait for it, so ask the human to start that version
+again. Never make a version current on your own: that is the deploy's
+decision, or the human's. A command answered with 503 and a message naming a
+draining version was sent to the wrong copy; the current one is the service to
+talk to. `jigs deployments prune` only forgets versions with no process and no
+runs, and is safe to run; `--cancel-runs` cancels runs, so only on the human's
+word.
 
 ## Parked runs and worktrees
 

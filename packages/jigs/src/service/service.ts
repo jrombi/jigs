@@ -7,8 +7,7 @@
 import {
   configuredDeploymentVersion,
   configuredJobPrefix,
-  deploymentJobPrefix,
-  WORLD_JOB_PREFIX_VARIABLE,
+  WORLD_DEPLOYMENT_VARIABLE,
 } from "../config/deployment-version.ts";
 import { resolveService } from "../config/factory-config.ts";
 import { currentFactoryContext, seedFactoryContext } from "../config/factory-context.ts";
@@ -17,8 +16,8 @@ import type { Factory, FactoryDefinition } from "../workflow/factory.ts";
 import { parseFactoryConfig } from "../workflow/factory-schema.ts";
 import { activeFactory } from "./active.ts";
 import { startWorld } from "./boot.ts";
-import { setDeploymentVersion } from "./role-state.ts";
-import { runAsVersion } from "./versioned.ts";
+import { deploymentVersion, setDeploymentVersion } from "./role-state.ts";
+import { runAsOnlyCopy, runAsVersion } from "./versioned.ts";
 
 export { type AppDeps, createApp } from "./app.ts";
 /** @internal */
@@ -47,20 +46,18 @@ export function listenOnServicePort(): void {
 }
 
 /**
- * Pin the World to this copy's deployment version, `JIGS_DEPLOYMENT_VERSION`, or exit naming what
- * is wrong with it. Call it at the top level of the service's Nitro plugin, beside
- * {@link listenOnServicePort}, before the World module is created.
+ * Pin the World to this copy's deployment version, `JIGS_DEPLOYMENT_VERSION`, when it has one, or
+ * exit naming what is wrong with it. Call it at the top level of the service's Nitro plugin,
+ * beside {@link listenOnServicePort}, before the World module is created.
  */
 export function pinDeploymentVersion(): void {
   try {
     const ctx = currentFactoryContext();
     const version = configuredDeploymentVersion(ctx);
-    const basePrefix = configuredJobPrefix(ctx);
-    // A per-version job prefix rather than the World's deployment id: runs keep
-    // one deployment, so any version can replay them (ADR 0019).
+    if (version === undefined) return;
     // biome-ignore lint/style/noProcessEnv: the SDK's own setting, derived from the factory's
-    process.env[WORLD_JOB_PREFIX_VARIABLE] = deploymentJobPrefix(basePrefix, version);
-    setDeploymentVersion(version, basePrefix);
+    process.env[WORLD_DEPLOYMENT_VARIABLE] = version;
+    setDeploymentVersion(version, configuredJobPrefix(ctx));
   } catch (err) {
     if (!(err instanceof JigsError)) throw err;
     console.error(`[service] ${err.message}${err.hint === undefined ? "" : `\n${err.hint}`}`);
@@ -70,9 +67,10 @@ export function pinDeploymentVersion(): void {
 
 /**
  * Start everything the service runs beside its routes: the World behind its startup checks, then
- * this copy's role as a deployment version, which is what runs the dashboard, schedules, event
- * triggers, automatic release and the hub client while the copy is current. Call it once, from
- * the service's Nitro plugin, with the factory configuration the service was built from.
+ * the dashboard, schedules, event triggers, automatic release and the hub client. A copy with a
+ * deployment version runs those only while its version is current, and drains otherwise. Call it
+ * once, from the service's Nitro plugin, with the factory configuration the service was built
+ * from.
  */
 export function startService(factory: Factory, config: FactoryDefinition): void {
   seedFactoryContext(parseFactoryConfig(config));
@@ -81,8 +79,9 @@ export function startService(factory: Factory, config: FactoryDefinition): void 
   // Neither is awaited, the way Nitro runs separate plugins: the role waits
   // on the World's readiness itself.
   void startWorld(live);
-  void runAsVersion(factory, live).catch((error: unknown) => {
-    console.error(`[service] could not take a deployment role: ${String(error)}`);
+  const run = deploymentVersion() === undefined ? runAsOnlyCopy : runAsVersion;
+  void run(factory, live).catch((error: unknown) => {
+    console.error(`[service] could not start the factory: ${String(error)}`);
     process.exit(1);
   });
 }

@@ -13,10 +13,10 @@ import { connectRegistry, ensureRegistry, type RegistrySql } from "../../steps/r
 import {
   currentDeployment,
   DEPLOYMENTS_CHANNEL,
+  drainingSince,
   listDeployments,
   makeDeploymentCurrent,
   pruneDeployments,
-  publishedIds,
   recordDeploymentBoot,
   touchDeployment,
   wasEverCurrent,
@@ -44,24 +44,22 @@ afterAll(async () => {
 });
 
 const FACTORY = "factory-a";
-const process_ = { pid: 4242, host: "box", ids: ["workflow//./workflows/a//a"] };
+const process_ = { pid: 4242, host: "box" };
 
-// A run started on `home` and driven by `owner`, as after a hand-over.
-async function insertRun(id: string, owner: string, status = "running", home = "v0") {
+// A run as the World stamps it when version `owner` starts it.
+async function insertRun(id: string, owner: string, status = "running") {
   await db.$client.query(
     `insert into "workflow"."workflow_runs" (id, name, status, deployment_id, job_prefix, created_at, updated_at)
      values ($1, 'workflow//./workflows/a//a', $2, $3, $4, now(), now())`,
-    [id, status, home, `workflow_${owner}_`],
+    [id, status, owner, `workflow_${owner}_`],
   );
 }
 
 dbTest(
-  "a booted version is listed as gone until made current, seen by its heartbeat, with its IDs published",
+  "a booted version is listed as draining until made current, and as gone once its heartbeat stops",
   async () => {
     await recordDeploymentBoot(db, FACTORY, "v1", process_);
     expect(await currentDeployment(db, FACTORY)).toBeNull();
-    expect(await publishedIds(db, FACTORY, "v1")).toEqual(process_.ids);
-    expect(await publishedIds(db, FACTORY, "v9")).toBeNull();
 
     const [listed] = await listDeployments(db, FACTORY);
     expect(listed).toMatchObject({
@@ -98,6 +96,8 @@ dbTest(
       expect(await currentDeployment(db, FACTORY)).toBe("v2");
       expect(await wasEverCurrent(db, FACTORY, "v1")).toBe(true);
       expect(await wasEverCurrent(db, FACTORY, "v2")).toBe(true);
+      expect(await drainingSince(db, FACTORY, "v1")).toBeInstanceOf(Date);
+      expect(await drainingSince(db, FACTORY, "v2")).toBeNull();
       await recordDeploymentBoot(db, FACTORY, "v3", process_);
       expect(await wasEverCurrent(db, FACTORY, "v3")).toBe(false);
       expect(await currentDeployment(db, "factory-b")).toBeNull();
@@ -107,7 +107,7 @@ dbTest(
   },
 );
 
-dbTest("the listing counts the live runs each version drives, wherever they started", async () => {
+dbTest("the listing counts the live runs each version started", async () => {
   await insertRun("wrun_01STORE000000000000000000A", "v1");
   await insertRun("wrun_01STORE000000000000000000B", "v1", "pending");
   await insertRun("wrun_01STORE000000000000000000C", "v1", "completed");

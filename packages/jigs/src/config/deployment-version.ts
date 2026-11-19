@@ -1,6 +1,7 @@
-// A copy's deployment version: the Graphile tasks its queue worker claims and
-// the job prefix it stamps on the runs it drives (ADR 0019). Hosted copies set it in
-// their environment; `jigs up` sets it from the built bundle's hash.
+// A copy's deployment version (ADR 0019): the World's deployment id, so the
+// Graphile tasks its queue worker claims and the deployment every run it
+// starts finishes on. Hosted copies set it in their environment; a copy
+// without one, such as the one `jigs up` runs, is the factory's only copy.
 
 import { JigsError } from "../errors.ts";
 import type { FactoryContext } from "./factory-context.ts";
@@ -8,10 +9,7 @@ import type { FactoryContext } from "./factory-context.ts";
 /** The environment variable a copy's deployment version comes from. */
 export const DEPLOYMENT_VERSION_VARIABLE = "JIGS_DEPLOYMENT_VERSION";
 
-/**
- * The World's deployment pinning, which a versioned factory leaves unset: with it, the SDK runs
- * a run only on the deployment that started it, so no run could be handed over.
- */
+/** The World's deployment id, which jigs sets from the deployment version. */
 export const WORLD_DEPLOYMENT_VARIABLE = "WORKFLOW_POSTGRES_DEPLOYMENT_ID";
 
 /** The World's variable for the base of its Graphile task names. */
@@ -51,21 +49,20 @@ export function validateDeploymentVersion(
   return version;
 }
 
-/** This copy's deployment version from its environment, validated against the World's job prefix. */
-export function configuredDeploymentVersion(ctx: FactoryContext): string {
-  if (ctx.env(WORLD_DEPLOYMENT_VARIABLE) !== undefined) {
-    throw new JigsError(
-      `${WORLD_DEPLOYMENT_VARIABLE} is set`,
-      `remove it: the service names its version with ${DEPLOYMENT_VERSION_VARIABLE}, and the World's own pinning would keep every run on the version that started it`,
-    );
-  }
+/**
+ * This copy's deployment version from its environment, validated against the World's job prefix,
+ * or undefined for a copy with none.
+ */
+export function configuredDeploymentVersion(ctx: FactoryContext): string | undefined {
   const version = ctx.env(DEPLOYMENT_VERSION_VARIABLE);
-  if (version === undefined) {
+  const worldDeployment = ctx.env(WORLD_DEPLOYMENT_VARIABLE);
+  if (worldDeployment !== undefined && worldDeployment !== version) {
     throw new JigsError(
-      `${DEPLOYMENT_VERSION_VARIABLE} is not set`,
-      "`jigs up` sets it for the service it starts\na copy started another way, such as a container, sets it in its environment to the version it runs, such as its image tag",
+      `${WORLD_DEPLOYMENT_VARIABLE} is set to ${JSON.stringify(worldDeployment)}`,
+      `remove it and set ${DEPLOYMENT_VERSION_VARIABLE} instead: jigs sets the World's deployment from the version, and only a versioned copy drains`,
     );
   }
+  if (version === undefined) return undefined;
   return validateDeploymentVersion(version, configuredJobPrefix(ctx));
 }
 
@@ -79,12 +76,8 @@ export function deploymentJobPrefix(jobPrefix: string, version: string): string 
   return `${jobPrefix}${version}_`;
 }
 
-/**
- * The Graphile tasks a version's queue worker claims: its flows task and its executor lane. Null
- * names the unpinned task, where the runs of a copy with no version are.
- */
-export function deploymentTasks(jobPrefix: string, version: string | null): string[] {
-  const prefix = version === null ? jobPrefix : deploymentJobPrefix(jobPrefix, version);
-  const flows = `${prefix}flows`;
+/** The Graphile tasks a version's queue worker claims: its flows task and its executor lane. */
+export function deploymentTasks(jobPrefix: string, version: string): string[] {
+  const flows = `${deploymentJobPrefix(jobPrefix, version)}flows`;
   return [flows, `${flows}_executor`];
 }

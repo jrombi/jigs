@@ -12,7 +12,7 @@ function harness(
   const exits: string[] = [];
   const started: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
   let fire: (() => void) | undefined;
-  const housekeep = vi.fn(async () => ({ owned: 0, queued: 0 }));
+  const drain = vi.fn(async () => ({ owned: 0, queued: 0 }));
   const deps: RoleControllerDeps = {
     version: "v1",
     currentVersion: async () => current,
@@ -28,7 +28,7 @@ function harness(
       started.push(parts);
       return parts;
     },
-    housekeep,
+    drain,
     exit: (reason) => exits.push(reason),
     setTimer: (callback, ms) => {
       const timer = { fire: callback, ms };
@@ -47,7 +47,7 @@ function harness(
     exits,
     started,
     timers,
-    housekeep,
+    drain,
     setCurrent: (version: string | null) => {
       current = version;
     },
@@ -60,15 +60,14 @@ function harness(
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-test("a copy whose version is current runs the full role and houses-keeps at once", async () => {
-  const h = harness();
-  h.setCurrent("v1");
+test("a copy whose version is current runs the full role and never drains", async () => {
+  const h = harness({}, "v1");
   await h.controller.refresh();
   await settle();
 
   expect(h.controller.role()).toBe("current");
   expect(h.started).toHaveLength(1);
-  expect(h.housekeep).toHaveBeenCalledWith("current", "v1");
+  expect(h.drain).not.toHaveBeenCalled();
   expect(h.lines).toContain("[service] version v1 is current");
 });
 
@@ -91,7 +90,7 @@ test("a current copy superseded by another version stops its full role and drain
   h.setCurrent("v1");
   await h.controller.refresh();
   h.markEverCurrent();
-  h.housekeep.mockResolvedValue({ owned: 2, queued: 0 });
+  h.drain.mockResolvedValue({ owned: 2, queued: 0 });
 
   h.setCurrent("v2");
   await h.controller.refresh();
@@ -99,7 +98,7 @@ test("a current copy superseded by another version stops its full role and drain
 
   expect(h.started[0]?.stop).toHaveBeenCalledOnce();
   expect(h.controller.role()).toBe("draining");
-  expect(h.housekeep).toHaveBeenLastCalledWith("draining", "v2");
+  expect(h.drain).toHaveBeenCalled();
   expect(h.lines).toContain("[service] version v1 draining: 2 run(s) owned, 0 job(s) queued");
   expect(h.exits).toEqual([]);
 });
@@ -125,8 +124,8 @@ test("a draining copy that was never current stays up, for whoever started it", 
   expect(h.lines).not.toContain("[service] version v1 drained, exiting");
 });
 
-test("the current version is re-read on a poll, and housekeeping runs on its own timer", async () => {
-  const h = harness({ pollMs: 5_000, housekeepMs: 30_000 });
+test("the current version is re-read on a poll, and a drain pass runs on its own timer", async () => {
+  const h = harness({ pollMs: 5_000, drainMs: 30_000 });
   h.setCurrent("v1");
   await h.controller.refresh();
   await vi.waitFor(() =>
@@ -137,9 +136,9 @@ test("the current version is re-read on a poll, and housekeeping runs on its own
   h.timers.find((timer) => timer.ms === 5_000)?.fire();
   await vi.waitFor(() => expect(h.controller.role()).toBe("draining"));
 
-  const before = h.housekeep.mock.calls.length;
+  const before = h.drain.mock.calls.length;
   h.timers.find((timer) => timer.ms === 30_000)?.fire();
-  await vi.waitFor(() => expect(h.housekeep.mock.calls.length).toBeGreaterThan(before));
+  await vi.waitFor(() => expect(h.drain.mock.calls.length).toBeGreaterThan(before));
 });
 
 test("stopping the controller stops the full role and cancels its timers", async () => {

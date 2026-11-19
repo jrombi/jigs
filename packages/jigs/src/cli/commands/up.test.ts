@@ -46,7 +46,6 @@ function up(
       prepare: vi.fn(),
       migrate: vi.fn(),
       runsInFlight: async () => [],
-      makeCurrent: async () => null,
       readyTimeoutMs: 500,
       ...extra,
     },
@@ -73,7 +72,6 @@ test("from a freshly scaffolded factory, every step runs once, in order", async 
     "build:ok",
     "service:ok",
     "ready:ok",
-    "current:ok",
     "doctor:ok",
   ]);
   expect(result.service).toBe("started");
@@ -105,28 +103,6 @@ test("from a freshly scaffolded factory, every step runs once, in order", async 
     "  stop everything:",
     "    pnpm exec jigs down",
   ]);
-});
-
-test("once ready, the started copy's bundle version is made current, and the previous one is named", async () => {
-  const io = { exec: fakeExec(), procs: fakeProcesses() };
-  const root = factory({ port: await fakeService(io.procs) });
-  const madeCurrent: Array<[string, string, string]> = [];
-  const makeCurrent = async (url: string, slug: string, version: string) => {
-    madeCurrent.push([url, slug, version]);
-    return "0123456789abcdef";
-  };
-
-  const result = await up(root, io, { makeCurrent });
-
-  expect(result.ok).toBe(true);
-  const [url, slug, version] = madeCurrent[0] ?? ["", "", ""];
-  expect(url).toBe("postgres://jigs:jigs@localhost:5555/jigs");
-  expect(slug).toMatch(/^acme-factory-/);
-  expect(version).toMatch(/^[0-9a-f]{16}$/);
-  expect(io.procs.spawns[0]?.env.JIGS_DEPLOYMENT_VERSION).toBe(version);
-  expect(lines.join("\n")).toMatch(
-    new RegExp(`^ok {3}current: ${version}, was 0123456789abcdef`, "m"),
-  );
 });
 
 test("a container compose cannot name is left out of the summary, not guessed", async () => {

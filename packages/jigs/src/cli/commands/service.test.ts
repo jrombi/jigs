@@ -201,8 +201,6 @@ test("the child inherits its dashboard port and owns the World's shutdown", asyn
 
   expect(io.spawns[0]?.env.JIGS_DASHBOARD_PORT).toBe("9200");
   expect(io.spawns[0]?.env.WORKFLOW_POSTGRES_APPLICATION_MANAGED_SHUTDOWN).toBe("1");
-  // The bundle's hash, shortened: the version the service pins the World to.
-  expect(io.spawns[0]?.env.JIGS_DEPLOYMENT_VERSION).toMatch(/^[0-9a-f]{16}$/);
   expect(lines).toContain("  dashboard  http://localhost:9200");
 });
 

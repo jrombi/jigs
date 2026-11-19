@@ -24,7 +24,7 @@ This bypasses that restriction for jigs. It does not force a `dlx` cache refresh
 | Command | What it does |
 | --- | --- |
 | `jigs init` | Create a factory in the current directory. Keeps existing files. |
-| `jigs up` | Install, start Postgres, build, start the service, wait until ready, make its version current, then run `jigs doctor`. |
+| `jigs up` | Install, start Postgres, build, start the service, wait until ready, then run `jigs doctor`. |
 | `jigs down` | Stop the service, then Postgres (`docker compose down`). Postgres's data is kept. |
 | `jigs doctor` | Check configuration, credentials and tools against the running service. |
 
@@ -209,19 +209,19 @@ unit also kills the service and its agents, so stop the factory with
 
 ## Versions
 
-Every running copy of a factory is a **deployment version**: the name of the
-build that drives a run. One version is **current**: it is the factory. It
-hears the hub, fires triggers and schedules, releases resources and serves the
-dashboard and the API. Every other running version **drains**: it keeps only
-its queue worker for the runs it still owns, hands each run that is parked to
-the current version, and exits with code 0 once it owns none. See
-[Versions and draining](/guide/concepts#versions) for how a run moves.
+A hosted factory can run several copies at once while it deploys. Each sets a
+**deployment version**, such as its image tag, and every run stays on the
+version that started it until it ends. One version is **current**: it is the
+factory. It hears the hub, fires triggers and schedules, releases resources and
+serves the dashboard and the API. Every other running version **drains**: it
+keeps only its queue worker, finishes the runs it started, and exits with code
+0 once none is left. See [Versions and draining](/guide/concepts#versions).
 
 | Command | What it does |
 | --- | --- |
-| `jigs deployments` | List every version that has run: its role (`current`, `draining`, or `gone` when no process has reported for a minute), when it started, when it was last seen, the runs it still owns, and its process. `--json` prints the same. |
-| `jigs deployments current <version>` | Make a version the factory. The one that was current drains. A hosted pipeline runs it once the new copy is healthy; a rollback is running it with the previous version. On a laptop, `jigs up` runs it for the copy it starts. |
-| `jigs deployments prune` | Forget versions that are not current, own no run and have no running process. |
+| `jigs deployments` | List every version that has run: its role (`current`, `draining`, or `gone` when no process has reported for a minute), when it started, when it was last seen, the live runs it started, and its process. `--json` prints the same. |
+| `jigs deployments current <version>` | Make a version the factory. The one that was current drains. A hosted pipeline runs it once the new copy is healthy; a rollback is running it with the previous version. |
+| `jigs deployments prune` | Forget versions that are not current and have no running process. A version that still has live runs is kept, and the command says so. `--cancel-runs` cancels those runs first, through the current service, then forgets the version. |
 
 The commands read the factory's database directly, so they work while the
 service is draining or stopped.
@@ -231,8 +231,9 @@ does not take over. A copy whose version has never been current stays up until
 you stop it, so a smoke test or a hand-started copy never exits on its own.
 
 A hosted copy sets its version in its environment, as
-[`JIGS_DEPLOYMENT_VERSION`](/guide/configuration#env). On a laptop, `jigs up`
-sets it from the hash of the bundle it built.
+[`JIGS_DEPLOYMENT_VERSION`](/guide/configuration#env). A copy without one, such
+as the one `jigs up` runs on a laptop, is the factory's only copy: it has no
+role and never drains.
 
 ## Advanced/build
 
@@ -256,9 +257,6 @@ Use `jigs up` after changing workflow code or configuration:
   parked on a hook, sleep or wake are not asked about: they lose nothing.
   `--force` skips the question but still prints the list; without a terminal,
   the command refuses, so retry when those steps finish.
-- The service `up` starts runs as a new [version](#versions), named after the
-  bundle it built, and `up` makes it current once it is ready. The runs the
-  stopped version left behind are adopted by the new one within a minute.
 - A failed step prints `FAIL <step>` and a repair. Fix it, then run `up` again.
 
 ## Upgrading jigs

@@ -143,28 +143,40 @@ different harnesses, direct model calls or ordinary code.
 
 ## Versions and draining {#versions}
 
-Every running copy of a factory carries a deployment version, and each run is
-driven by one version at a time: the one that started it, until it is handed
-over. One version is current, made so by
+A hosted factory deploys a new build beside the one already running. Each such
+copy carries a deployment version, such as its image tag, and each run stays on
+the version that started it until the run ends: the run replays its workflow on
+the build it began with, so an upgrade never changes the code under a run in
+flight. One version is current, made so by
 [`jigs deployments current`](/guide/cli#versions); it is the factory, and it
 alone hears the hub, fires triggers and schedules, releases resources and
-serves the dashboard and the API. Any other running version drains.
+serves the dashboard and the API. New runs start there. Any other running
+version drains.
 
-A draining version keeps its queue worker, so a step that is executing finishes
-where it started. Whenever one of its runs is parked, with no step executing
-and nothing queued for it, it hands the run to the current version, provided
-the current build still has every workflow and step the run recorded. A parked
-run loses nothing by moving: its next wake is carried to the current version.
-Once the draining version owns no run, it logs that it is retiring and exits
-with code 0. What that exit means is up to whatever started it: a container
-platform or a systemd unit treats it as the end of that task.
+A draining version keeps only its queue worker. Its parked runs still wake on
+it: a hook resumed, or a message sent, from any copy reaches the version the
+run belongs to. Once it has no live run and nothing queued, it logs that it
+drained and exits with code 0. What that exit means is up to whatever started
+it: a container platform or a systemd unit treats it as the end of that task,
+so restart a copy only when it fails.
 
-A version whose process is gone, after a crash or a `jigs up` restart, has its
-runs adopted by the current version within a minute, queued work included.
+A version does not drain forever. Once it has not been current for
+[`deployments.maxDrainDays`](/guide/configuration#deployments) days, 14 unless
+the factory says otherwise, it cancels each run it still has, as `jigs cancel`
+would, logs each one, and exits with code 0.
+
+A version whose process is gone, after a crash, keeps its runs: they wait until
+that version runs again, so start it again rather than leaving it down. If it
+cannot come back, `jigs deployments prune --cancel-runs` cancels its runs and
+forgets it.
 
 A reply or a Stop in a Linear agent session reaches an agent's running turn
 whichever version runs it: the current version receives the event and relays
 it through the factory's database to the copy holding the turn.
+
+A copy without a version, such as the one `jigs up` runs on a laptop, is the
+factory's only copy: it has every role, and a restart of it replays its runs on
+the new build.
 
 ## Factories and repositories
 

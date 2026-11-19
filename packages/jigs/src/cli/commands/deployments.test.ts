@@ -11,6 +11,8 @@ const store = vi.hoisted(() => ({
   pruneDeployments: vi.fn(),
 }));
 vi.mock("../../service/deployments/store.ts", () => store);
+const drain = vi.hoisted(() => ({ liveRunIds: vi.fn() }));
+vi.mock("../../service/deployments/drain.ts", () => drain);
 
 const NOW = new Date("2026-11-18T12:00:00.000Z");
 let parent: string;
@@ -25,6 +27,7 @@ beforeEach(() => {
   store.listDeployments.mockReset();
   store.makeDeploymentCurrent.mockReset();
   store.pruneDeployments.mockReset();
+  drain.liveRunIds.mockReset();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -48,6 +51,7 @@ const view = (fields: Partial<DeploymentView>): DeploymentView => ({
   startedAt: "2026-11-18T11:00:00.000Z",
   lastSeenAt: "2026-11-18T11:59:50.000Z",
   madeCurrentAt: "2026-11-18T11:00:00.000Z",
+  supersededAt: null,
   pid: 4242,
   host: "box",
   runs: 0,
@@ -99,19 +103,60 @@ test("current validates the version, writes it and names the one it replaced", a
   );
   expect(lines).toEqual([
     "version v2 is now current (was v1)",
-    "version v1 drains: it hands its parked runs over and exits once it owns none",
+    "version v1 drains: it finishes the runs it started and exits once it owns none",
   ]);
   await expect(makeCurrent("not/ok", deps())).rejects.toThrow("not a usable deployment version");
 });
 
+const pruneDeps = (cancel = vi.fn(async () => {})) => ({
+  ...deps(),
+  serviceUrl: "http://localhost:1",
+  cancel,
+});
+
 test("prune reports each version removed, or that there was nothing to remove", async () => {
+  store.listDeployments.mockResolvedValue([]);
   store.pruneDeployments.mockResolvedValueOnce(["v0"]).mockResolvedValueOnce([]);
-  await pruneDeployments(deps());
-  await pruneDeployments(deps());
+  await pruneDeployments(pruneDeps());
+  await pruneDeployments(pruneDeps());
   expect(lines).toEqual([
     "removed version v0",
-    "nothing to prune: every version is current, running or owns runs",
+    "nothing to prune: every version is current or running",
   ]);
+});
+
+test("prune keeps a version with no process that still owns runs, and says how to finish them", async () => {
+  store.listDeployments.mockResolvedValue([view({ version: "v0", role: "gone", runs: 2 })]);
+  store.pruneDeployments.mockResolvedValue([]);
+  const cancel = vi.fn(async () => {});
+
+  await pruneDeployments(pruneDeps(cancel));
+
+  expect(cancel).not.toHaveBeenCalled();
+  expect(lines).toEqual([
+    "kept version v0: it has no process and owns 2 live run(s)",
+    "start that version again to finish its runs, or cancel them and prune it:",
+    "  pnpm exec jigs deployments prune --cancel-runs",
+  ]);
+});
+
+test("prune --cancel-runs cancels a gone version's runs, then forgets it", async () => {
+  store.listDeployments.mockResolvedValue([
+    view({ version: "v1", role: "draining", runs: 1 }),
+    view({ version: "v0", role: "gone", runs: 2 }),
+  ]);
+  drain.liveRunIds.mockResolvedValue(["wrun_a", "wrun_b"]);
+  store.pruneDeployments.mockResolvedValue(["v0"]);
+  const cancel = vi.fn(async () => {});
+
+  await pruneDeployments(pruneDeps(cancel), { cancelRuns: true });
+
+  expect(drain.liveRunIds).toHaveBeenCalledWith(expect.anything(), {
+    version: "v0",
+    jobPrefix: "workflow_",
+  });
+  expect(cancel.mock.calls).toEqual([["wrun_a"], ["wrun_b"]]);
+  expect(lines).toEqual(["removed version v0"]);
 });
 
 test("without WORKFLOW_POSTGRES_URL the command says which variable to set", async () => {

@@ -78,7 +78,8 @@ Versions:
   deployments               List the versions that have run, which is current,
                             and the runs each still owns
   deployments current <v>   Make a version the factory; the others drain
-  deployments prune         Forget versions with no process and no runs
+  deployments prune         Forget versions with no process and no runs;
+                            --cancel-runs cancels a gone version's runs first
 
 Workflows and runs:
   workflows                 List the workflows the service can run
@@ -412,8 +413,16 @@ deploymentsCommand
 deploymentsCommand
   .command("prune")
   .description("forget every version that is not current, has no running process and owns no run")
-  .action(async () => {
-    await pruneDeployments({ out });
+  .option(
+    "--cancel-runs",
+    "cancel the live runs of versions with no process first, then forget them",
+  )
+  .addOption(serviceOption())
+  .action(async (options: { cancelRuns?: boolean; serviceUrl?: string }) => {
+    await pruneDeployments(
+      { out, serviceUrl: resolveServiceUrl(options.serviceUrl) },
+      { cancelRuns: options.cancelRuns },
+    );
   });
 
 program

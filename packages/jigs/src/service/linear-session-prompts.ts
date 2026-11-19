@@ -19,6 +19,7 @@ import {
 import { recordedOccurrences, withdrawOccurrence } from "./event-triggers/runner.ts";
 import type { Occurrence } from "./event-triggers/store.ts";
 import { awaitTaken, leaveLiveTurnMessage, type RelayedMessage } from "./live-turn-relay.ts";
+import { deploymentVersion } from "./role-state.ts";
 import { cancelRun, runStatuses } from "./runs.ts";
 import { wake } from "./wake.ts";
 
@@ -88,6 +89,8 @@ export interface SessionPromptDeps {
 export const sessionPromptDeps: SessionPromptDeps = {
   liveTurn,
   relay: async (token, message) => {
+    // A copy with no version is the factory's only one: no other copy holds a turn.
+    if (deploymentVersion() === undefined) return false;
     const db = registrySql();
     const id = await leaveLiveTurnMessage(db, currentFactoryContext().slug, token, message);
     return awaitTaken(db, id);

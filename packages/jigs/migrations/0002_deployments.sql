@@ -5,9 +5,9 @@ CREATE TABLE "jigs_deployments" (
   "last_seen_at" timestamptz,
   "pid" integer,
   "host" text,
-  "ids" jsonb,
   "current" boolean NOT NULL DEFAULT false,
   "made_current_at" timestamptz,
+  "superseded_at" timestamptz,
   "created_at" timestamptz NOT NULL DEFAULT now(),
   "updated_at" timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY ("factory", "version")

@@ -103,6 +103,7 @@ test("root and no-argument help are side-effect-free, grouped and exact", () => 
       "Set up:",
       "Start and stop:",
       "Service process:",
+      "Versions:",
       "Workflows and runs:",
       "Repositories:",
       "Recipes:",

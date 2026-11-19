@@ -3,12 +3,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { dashboardAddress } from "../config/factory-config.ts";
 import { currentFactoryContext } from "../config/factory-context.ts";
-import { onShutdown } from "./shutdown.ts";
 
 // Hosted here rather than run standalone: a second process opening this World
 // runs a second queue worker, which steals the service's jobs.
-/** Start the Workflow dashboard and register its shutdown cleanup. */
-export async function startDashboard() {
+/** Start the Workflow dashboard; the caller closes it when the copy stops being current or stops. */
+export async function startDashboard(): Promise<{ close: () => Promise<void> }> {
   const ctx = currentFactoryContext();
   const port = Number(ctx.env("JIGS_DASHBOARD_PORT"));
   // Nitro does not await its plugins, so touching the World through the
@@ -17,10 +16,10 @@ export async function startDashboard() {
   await getWorld();
   const { startServer } = await import(dashboardEntry());
   const server: DashboardServer = await startServer(port);
+  console.log(`[service] dashboard: ${dashboardAddress(ctx)}`);
   // A dashboard tab left open holds a keep-alive socket, so drop every
   // connection rather than wait on the browser.
-  onShutdown(() => server.close(true));
-  console.log(`[service] dashboard: ${dashboardAddress(ctx)}`);
+  return { close: () => server.close(true) };
 }
 
 // The srvx server @workflow/web starts. The entry is loaded by path, so its

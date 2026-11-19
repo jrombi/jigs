@@ -4,23 +4,18 @@ import { afterEach, expect, test, vi } from "vitest";
 import { currentFactoryContext } from "../config/factory-context.ts";
 import { inTestFactory } from "../test-fixtures.ts";
 import type { Factory } from "../workflow/factory.ts";
-import { startTriggers, withdrawInactive } from "./event-triggers/runner.ts";
-import { startSchedules } from "./schedules.ts";
-import { listenOnServicePort, startService } from "./service.ts";
+import { deploymentVersion, resetRoleState } from "./role-state.ts";
+import { listenOnServicePort, pinDeploymentVersion, startService } from "./service.ts";
+import { runAsVersion } from "./versioned.ts";
 
 vi.mock("./boot.ts", () => ({ startWorld: vi.fn(async () => {}) }));
-vi.mock("./dashboard.ts", () => ({ startDashboard: vi.fn(async () => {}) }));
-vi.mock("./schedules.ts", () => ({ startSchedules: vi.fn() }));
-vi.mock("./event-triggers/runner.ts", () => ({
-  startTriggers: vi.fn(),
-  withdrawInactive: vi.fn(async () => {}),
-}));
-vi.mock("./automatic-release.ts", () => ({ startAutomaticRelease: vi.fn() }));
+vi.mock("./versioned.ts", () => ({ runAsVersion: vi.fn(async () => {}) }));
 
 afterEach(() => {
   delete (globalThis as Record<symbol, unknown>)[Symbol.for("jigs.factory-context")];
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  resetRoleState();
 });
 inTestFactory({
   hub: { url: "https://hub.example.test" },
@@ -41,24 +36,48 @@ test("the service runs on the configuration it was built with, whatever jigs.con
   expect(currentFactoryContext().config.github.operator).toBe("built");
 });
 
-test("only active triggers and schedules start; each inactive one is logged, and its waiting occurrences skipped", () => {
+test("the role runs only the active triggers and schedules; each inactive one is logged", () => {
   const lines: string[] = [];
   vi.spyOn(console, "log").mockImplementation((line: string) => lines.push(line));
   const source = { kind: "fake.pages", params: {} };
   const on = { active: true, workflow: "w", source };
   const nightly = { active: true, workflow: "w", cron: "0 3 * * *", inputs: {} };
-  startService(
-    {
-      workflows: {},
-      schedules: { nightly, quiet: { ...nightly, active: false } },
-      triggers: { pages: on, off: { ...on, active: false } },
-    } as unknown as Factory,
-    { hub: { url: "https://hub.example.test" }, workflows: {} },
-  );
-  expect(vi.mocked(startSchedules).mock.lastCall?.[0].schedules).toEqual({ nightly });
-  expect(vi.mocked(startTriggers).mock.lastCall?.[0].triggers).toEqual({ pages: on });
-  expect(vi.mocked(withdrawInactive)).toHaveBeenLastCalledWith(["off"]);
+  const factory = {
+    workflows: {},
+    schedules: { nightly, quiet: { ...nightly, active: false } },
+    triggers: { pages: on, off: { ...on, active: false } },
+  } as unknown as Factory;
+  startService(factory, { hub: { url: "https://hub.example.test" }, workflows: {} });
+  const [whole, live] = vi.mocked(runAsVersion).mock.lastCall ?? [];
+  expect(whole).toBe(factory);
+  expect(live?.schedules).toEqual({ nightly });
+  expect(live?.triggers).toEqual({ pages: on });
   expect(lines).toEqual(["[schedule] quiet inactive", "[trigger] off inactive"]);
+});
+
+test("the service pins the World to JIGS_DEPLOYMENT_VERSION", () => {
+  vi.stubEnv("JIGS_DEPLOYMENT_VERSION", "2026.11.18-a1b2");
+  vi.stubEnv("WORKFLOW_POSTGRES_DEPLOYMENT_ID", "");
+
+  pinDeploymentVersion();
+
+  expect(process.env.WORKFLOW_POSTGRES_DEPLOYMENT_ID).toBe("2026.11.18-a1b2");
+  expect(deploymentVersion()).toBe("2026.11.18-a1b2");
+});
+
+test.each([
+  ["", "JIGS_DEPLOYMENT_VERSION is not set"],
+  ["bad/version", "not a usable deployment version"],
+])("a service whose version is %j exits saying so", (version, message) => {
+  vi.stubEnv("JIGS_DEPLOYMENT_VERSION", version);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+  pinDeploymentVersion();
+
+  expect(error.mock.calls[0]?.[0]).toMatch(/^\[service\] /);
+  expect(error.mock.calls[0]?.[0]).toContain(message);
+  expect(exit).toHaveBeenCalledWith(1);
 });
 
 test("the service listens on JIGS_SERVICE_PORT and its queue delivers there", () => {

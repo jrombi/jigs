@@ -448,7 +448,13 @@ const [
   CANCEL_PORT,
   CANCEL_DASHBOARD_PORT,
   HUB_PORT,
-] = await freePorts(7);
+  DRAIN_PORT,
+  DRAIN_DASHBOARD_PORT,
+] = await freePorts(9);
+// Every boot here runs as a deployment version made current first: a copy that
+// is not current drains, serving neither its dashboard nor its API.
+const BOOT_VERSION = "e2e-boot";
+const RUNTIME_VERSION = "e2e-runtime";
 const BOOT_TIMEOUT_MS = 90_000;
 const SHUTDOWN_TIMEOUT_MS = 8_000;
 const READY_POLL_MS = 100;
@@ -498,6 +504,7 @@ function bootOutcome(
     ...baseEnv,
     JIGS_SERVICE_PORT: String(BOOT_PORT),
     JIGS_DASHBOARD_PORT: String(BOOT_DASHBOARD_PORT),
+    JIGS_DEPLOYMENT_VERSION: BOOT_VERSION,
     WORKFLOW_TARGET_WORLD: BOOT_WORLD,
     WORKFLOW_POSTGRES_URL: postgresUrl,
   };
@@ -699,21 +706,37 @@ export default defineWorkflow({ inputs: runtimeE2eInputs, workflow: runtimeE2eWo
   );
 }
 
-function runtimeEnv(postgresUrl) {
+// The factory's own CLI, as the deploy that makes a version current would run it.
+function makeCurrent(env, version) {
+  execFileSync(
+    path.join(factory, "node_modules", ".bin", "jigs"),
+    ["deployments", "current", version],
+    { cwd: factory, env, stdio: "inherit" },
+  );
+}
+
+const RUNTIME_PORTS = { service: RUNTIME_PORT, dashboard: RUNTIME_DASHBOARD_PORT };
+
+function runtimeEnv(postgresUrl, version = RUNTIME_VERSION, ports = RUNTIME_PORTS) {
   return {
     ...process.env,
-    JIGS_SERVICE_PORT: String(RUNTIME_PORT),
-    JIGS_DASHBOARD_PORT: String(RUNTIME_DASHBOARD_PORT),
+    JIGS_SERVICE_PORT: String(ports.service),
+    JIGS_DASHBOARD_PORT: String(ports.dashboard),
+    JIGS_DEPLOYMENT_VERSION: version,
     WORKFLOW_POSTGRES_APPLICATION_MANAGED_SHUTDOWN: "1",
     WORKFLOW_POSTGRES_URL: postgresUrl,
     WORKFLOW_TARGET_WORLD: "@workflow/world-postgres",
   };
 }
 
-async function startRuntimeService(postgresUrl) {
+// A copy that is current serves its dashboard too; a draining one only its liveness.
+async function startRuntimeService(
+  postgresUrl,
+  { version = RUNTIME_VERSION, ports = RUNTIME_PORTS, current = true } = {},
+) {
   const child = spawn(process.execPath, [bundle()], {
     cwd: factory,
-    env: runtimeEnv(postgresUrl),
+    env: runtimeEnv(postgresUrl, version, ports),
   });
   let output = "";
   child.stdout.setEncoding("utf8").on("data", (chunk) => {
@@ -728,23 +751,25 @@ async function startRuntimeService(postgresUrl) {
         throw new Error(`runtime service exited before readiness\n${output}`);
       }
       try {
-        const [health, dashboard] = await Promise.all([
-          fetch(`http://127.0.0.1:${RUNTIME_PORT}/health`, {
-            signal: AbortSignal.timeout(1_000),
-          }),
-          fetch(`http://127.0.0.1:${RUNTIME_DASHBOARD_PORT}/`, {
-            signal: AbortSignal.timeout(1_000),
-          }),
-        ]);
-        return health.ok && (await health.json()).ready === true && dashboard.ok;
+        const health = await fetch(`http://127.0.0.1:${ports.service}/health`, {
+          signal: AbortSignal.timeout(1_000),
+        });
+        if (!health.ok) return false;
+        const body = await health.json();
+        if (body.ready !== true || body.role !== (current ? "current" : "draining")) return false;
+        if (!current) return true;
+        const dashboard = await fetch(`http://127.0.0.1:${ports.dashboard}/`, {
+          signal: AbortSignal.timeout(1_000),
+        });
+        return dashboard.ok;
       } catch {
         return false;
       }
     },
-    "runtime service and dashboard did not become ready",
+    `runtime service${current ? " and dashboard" : ""} did not become ready as ${version}`,
     RUNTIME_TIMEOUT_MS,
   );
-  return { child, output: () => output };
+  return { child, output: () => output, ports, version };
 }
 
 async function stopRuntimeService(service) {
@@ -771,6 +796,7 @@ async function runtimeScenario(postgresUrl) {
   installRuntimeFixture();
   build();
   run(path.join(factory, "node_modules", ".bin", "bootstrap"), []);
+  makeCurrent(runtimeEnv(postgresUrl), RUNTIME_VERSION);
 
   const marker = path.join(scratch, "runtime-step-markers.txt");
   const token = `runtime-e2e-${crypto.randomUUID()}`;
@@ -919,6 +945,138 @@ async function runtimeScenario(postgresUrl) {
   }
 }
 
+const DRAIN_TIMEOUT_MS = 60_000;
+
+// Two versions on one database: the first is current and parks a run on its
+// hook; the second boots draining; making the second current hands the run
+// over, the first exits 0 on its own, and the run completes on the second.
+async function drainScenario(postgresUrl) {
+  const v1 = { version: "drain-v1", ports: RUNTIME_PORTS };
+  const v2 = {
+    version: "drain-v2",
+    ports: { service: DRAIN_PORT, dashboard: DRAIN_DASHBOARD_PORT },
+  };
+  makeCurrent(runtimeEnv(postgresUrl), v1.version);
+  const first = await startRuntimeService(postgresUrl, v1);
+  let second;
+  try {
+    const marker = path.join(scratch, "drain-step-markers.txt");
+    const token = `drain-e2e-${crypto.randomUUID()}`;
+    const started = await fetch(
+      `http://127.0.0.1:${v1.ports.service}/api/workflows/runtimeE2e/runs`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ inputs: { marker, token } }),
+      },
+    );
+    if (started.status !== 201) {
+      throw new Error(`drain workflow start returned ${started.status}: ${await started.text()}`);
+    }
+    const { runId } = await started.json();
+    await until(
+      async () => (await runtimeRun(runId, v1.ports.service)).suspensions.length > 0,
+      `drain workflow ${runId} never parked on its hook`,
+      RUNTIME_TIMEOUT_MS,
+    );
+
+    second = await startRuntimeService(postgresUrl, { ...v2, current: false });
+    const health = await (
+      await fetch(`http://127.0.0.1:${v2.ports.service}/health`, {
+        signal: AbortSignal.timeout(2_000),
+      })
+    ).json();
+    if (health.version !== v2.version || health.currentVersion !== v1.version) {
+      throw new Error(`the second copy's liveness is wrong: ${JSON.stringify(health)}`);
+    }
+    const refused = await fetch(`http://127.0.0.1:${v2.ports.service}/api/runs`, {
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (refused.status !== 503) {
+      throw new Error(`a draining copy answered ${refused.status} on its API, not 503`);
+    }
+
+    const firstExit = new Promise((resolve) =>
+      first.child.once("close", (code, signal) => resolve({ code, signal })),
+    );
+    makeCurrent(runtimeEnv(postgresUrl), v2.version);
+    const exit = await Promise.race([
+      firstExit,
+      new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), DRAIN_TIMEOUT_MS)),
+    ]);
+    if ("timeout" in exit) {
+      first.child.kill("SIGKILL");
+      throw new Error(`the superseded version did not exit on its own\n${first.output()}`);
+    }
+    if (exit.code !== 0) {
+      throw new Error(
+        `the superseded version exited with code ${exit.code} (signal ${exit.signal}), not 0\n${first.output()}`,
+      );
+    }
+    const handedOver = `run ${runId} handed over from version ${v1.version} to version ${v2.version}`;
+    const drained = `version ${v1.version} drained, exiting`;
+    for (const line of [handedOver, drained]) {
+      if (!first.output().includes(line)) {
+        throw new Error(`the superseded version never logged "${line}"\n${first.output()}`);
+      }
+    }
+    await until(
+      async () => {
+        const health = await fetch(`http://127.0.0.1:${v2.ports.service}/health`, {
+          signal: AbortSignal.timeout(1_000),
+        });
+        return health.ok && (await health.json()).role === "current";
+      },
+      "the second copy never took the current role",
+      RUNTIME_TIMEOUT_MS,
+    );
+    const { deployments } = await (
+      await fetch(`http://127.0.0.1:${v2.ports.service}/api/deployments`, {
+        signal: AbortSignal.timeout(2_000),
+      })
+    ).json();
+    const byVersion = new Map(deployments.map((view) => [view.version, view]));
+    if (byVersion.get(v2.version)?.role !== "current" || byVersion.get(v2.version)?.runs !== 1) {
+      throw new Error(`the deployments listing is wrong: ${JSON.stringify(deployments)}`);
+    }
+    if (byVersion.get(v1.version)?.runs !== 0) {
+      throw new Error(`the superseded version still owns runs: ${JSON.stringify(deployments)}`);
+    }
+
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        'import { resumeHook } from "workflow/api"; import { getWorld } from "workflow/runtime"; await resumeHook(process.argv[1], undefined); await (await getWorld()).close?.();',
+        token,
+      ],
+      { cwd: factory, env: runtimeEnv(postgresUrl, v2.version, v2.ports), stdio: "inherit" },
+    );
+    let terminal;
+    await until(
+      async () => {
+        terminal = await runtimeRun(runId, v2.ports.service);
+        return terminal.status === "completed";
+      },
+      `drain workflow ${runId} did not complete on the new version`,
+      RUNTIME_TIMEOUT_MS,
+    );
+    if (!terminal.returnValue.lines.includes("end resumed")) {
+      throw new Error(
+        `the handed-over run never ran its resumed step: ${JSON.stringify(terminal.returnValue)}`,
+      );
+    }
+    console.log(
+      `run ${runId} parked on ${v1.version}, was handed to ${v2.version} once it was made current, ${v1.version} exited 0 on its own, and the run completed on ${v2.version}`,
+    );
+  } finally {
+    if (second !== undefined) await stopRuntimeService(second);
+    if (first.child.exitCode === null && first.child.signalCode === null)
+      first.child.kill("SIGKILL");
+  }
+}
+
 function assertRuntimeResources(records, runId, stage) {
   const expected = [
     {
@@ -944,8 +1102,8 @@ function assertRuntimeResources(records, runId, stage) {
   }
 }
 
-async function runtimeRun(runId) {
-  const response = await fetch(`http://127.0.0.1:${RUNTIME_PORT}/api/runs/${runId}`, {
+async function runtimeRun(runId, port = RUNTIME_PORT) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/runs/${runId}`, {
     signal: AbortSignal.timeout(2_000),
   });
   if (!response.ok)
@@ -1184,6 +1342,7 @@ if (postgresUrl === undefined) {
     );
     const recipeFactory = factory;
     factory = factories.get("bare");
+    makeCurrent({ ...bareEnv(), WORKFLOW_POSTGRES_URL: postgresUrl }, BOOT_VERSION);
     const bareBoot = await bootOutcome(postgresUrl, {
       env: bareEnv(),
       workflow: "hello",
@@ -1214,6 +1373,7 @@ if (postgresUrl === undefined) {
     // disk that throws when loaded must not stop it.
     const configFile = path.join(factory, "jigs.config.ts");
     const builtConfig = readFileSync(configFile, "utf8");
+    makeCurrent({ ...process.env, WORKFLOW_POSTGRES_URL: postgresUrl }, BOOT_VERSION);
     writeFileSync(configFile, 'throw new Error("the service read jigs.config.ts");\n');
     // The hub stops first, while the factory still long-polls it, as a hub
     // restarted under a running factory does. Later checks need no hub.
@@ -1253,6 +1413,10 @@ if (postgresUrl === undefined) {
       `\n=== runtime: real Postgres steps, sleep, parallel work, restart recovery, hook resume, and dashboard`,
     );
     await runtimeScenario(postgresUrl);
+    console.log(
+      "\n=== drain: two versions on one database; the superseded one hands its parked run over and exits 0",
+    );
+    await drainScenario(postgresUrl);
   }
 
   if (only !== "ids") {

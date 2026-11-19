@@ -77,13 +77,37 @@ export interface WorkflowDefinition<S extends z.ZodType = z.ZodType> {
    */
   requires?: WorkflowRequires;
   release?: ReleasePolicy;
+  /**
+   * What happens to this workflow's runs when a new version of the factory takes over.
+   * `auto-upgrade`, the default, hands a parked run to the new version as soon as nothing of it
+   * is executing, provided the new build still has every step the run recorded. `pinned` keeps
+   * every run on the version that started it until the run ends, so a long agent run finishes on
+   * the code it began with; that version keeps running until then.
+   */
+  versioning?: WorkflowVersioning;
   workflow: (inputs: WorkflowInputs<S>) => Promise<unknown>;
 }
 
 /**
+ * How a workflow's runs follow a new version of the factory.
+ *
+ * @group Factory and workflows
+ */
+export type WorkflowVersioning = z.infer<typeof workflowVersioningSchema>;
+
+export const workflowVersioningSchema = z.enum(["auto-upgrade", "pinned"]);
+
+/** The versioning a workflow definition asks for, `auto-upgrade` when it says nothing. */
+export function workflowVersioning(
+  definition: Pick<WorkflowDefinition, "versioning">,
+): WorkflowVersioning {
+  return definition.versioning ?? "auto-upgrade";
+}
+
+/**
  * Declare a workflow as the default export of its file. It returns the
- * definition unchanged; it exists so TypeScript checks the workflow's
- * parameter against the input schema.
+ * definition unchanged, after checking `versioning`; it exists so TypeScript
+ * checks the workflow's parameter against the input schema.
  *
  * @example
  * ```ts
@@ -105,6 +129,14 @@ export interface WorkflowDefinition<S extends z.ZodType = z.ZodType> {
 export function defineWorkflow<S extends z.ZodType>(
   definition: WorkflowDefinition<S>,
 ): WorkflowDefinition<S> {
+  if (definition.versioning !== undefined) {
+    const parsed = workflowVersioningSchema.safeParse(definition.versioning);
+    if (!parsed.success) {
+      throw new Error(
+        `versioning must be "auto-upgrade" or "pinned", not ${JSON.stringify(definition.versioning)}`,
+      );
+    }
+  }
   return definition;
 }
 

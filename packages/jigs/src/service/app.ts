@@ -22,11 +22,13 @@ import type { Factory } from "../workflow/factory.ts";
 import { isOwnershipKind, parseHookToken } from "../workflow/hook-tokens.ts";
 import { UNRELEASED_STATES } from "../workflow/runtime/resources.ts";
 import { activeFactory } from "./active.ts";
+import { listDeployments } from "./deployments/store.ts";
 import { triggerStore } from "./event-triggers/store.ts";
 import { listTriggers, triggerChecks, triggerInstallations } from "./event-triggers/view.ts";
 import { startRun } from "./launch.ts";
 import { listRunDeadJobs } from "./queue.ts";
 import { bootPhase, isReady } from "./readiness.ts";
+import { currentVersion, deploymentVersion, serviceRole } from "./role-state.ts";
 import {
   listRunSteps,
   listRuns,
@@ -65,11 +67,13 @@ export function createApp(factory: Factory, deps: Partial<AppDeps> = {}): Reques
     next();
   });
 
-  // Liveness, plus how far the boot has got; dependency verification is
-  // preflight's job. Nitro serves this route before the plugins have run, so
-  // `ready` — not the 200 — is what `jigs up` waits on. With a
-  // service per factory repo, `factoryRoot` is the only thing that says which
-  // factory answers here, and `pid` which process.
+  // Liveness, plus how far the boot has got and which role this copy plays;
+  // dependency verification is preflight's job. Nitro serves this route before
+  // the plugins have run, so `ready` — not the 200 — is what `jigs up` waits
+  // on. With a service per factory repo, `factoryRoot` is the only thing that
+  // says which factory answers here, and `pid` which process. Answered by a
+  // draining copy too: a platform's liveness check must not kill a copy that
+  // is finishing its runs.
   app.get("/health", (_request, response) =>
     response.json({
       ok: true,
@@ -80,6 +84,32 @@ export function createApp(factory: Factory, deps: Partial<AppDeps> = {}): Reques
       pid: process.pid,
       workflows: Object.keys(factory.workflows),
       uptimeSeconds: Math.round(process.uptime()),
+      version: deploymentVersion() ?? null,
+      role: serviceRole() ?? null,
+      currentVersion: currentVersion(),
+    }),
+  );
+
+  // A draining copy serves nothing but its liveness: the current version is
+  // the factory, and a command that reached this copy should go there.
+  app.use((_request, response, next) => {
+    if (serviceRole() !== "draining") {
+      next();
+      return;
+    }
+    const current = currentVersion();
+    response.status(503).json({
+      error: `this copy runs version ${deploymentVersion()}, which is draining${current === null ? "" : `; version ${current} is current`}`,
+      version: deploymentVersion(),
+      currentVersion: current,
+    });
+  });
+
+  // Every version that has run, with its role and the runs it still owns: what `jigs deployments` prints.
+  app.get("/api/deployments", async (_request, response) =>
+    response.json({
+      version: deploymentVersion() ?? null,
+      deployments: await listDeployments(registry(), context().slug),
     }),
   );
 

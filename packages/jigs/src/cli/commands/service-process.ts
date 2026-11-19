@@ -10,6 +10,7 @@ import {
   statSync,
 } from "node:fs";
 import path from "node:path";
+import { DEPLOYMENT_VERSION_VARIABLE } from "../../config/deployment-version.ts";
 import type { ResolvedService } from "../../config/factory-config.ts";
 import { currentFactoryContext } from "../../config/factory-context.ts";
 import { JigsError } from "../../errors.ts";
@@ -74,6 +75,14 @@ export interface ServiceLifecycleDeps {
   stopTimeoutMs?: number;
   killWaitMs?: number;
   now?: () => Date;
+}
+
+// Long enough to tell builds apart, short enough to read in `jigs deployments`.
+const VERSION_LENGTH = 16;
+
+/** The deployment version `jigs up` gives the service it starts: the built bundle's hash, shortened. */
+export function builtBundleVersion(factoryRoot: string): string | undefined {
+  return builtBundleHash(factoryRoot)?.slice(0, VERSION_LENGTH);
 }
 
 export function builtBundleHash(factoryRoot: string): string | undefined {
@@ -150,13 +159,16 @@ export function serviceBehindSources(deps: BundleDeps): string | undefined {
   return undefined;
 }
 
-function childEnv(): Record<string, string> {
+function childEnv(version: string): Record<string, string> {
   return {
     ...stringEnv(),
     // The v5 Postgres package reads this when its module-level World is
     // created. Set it on the child itself, before any bundled module runs;
     // setting it only in the Nitro startup plugin can be too late.
     WORKFLOW_POSTGRES_APPLICATION_MANAGED_SHUTDOWN: "1",
+    // On a laptop the bundle `jigs up` built is the version (ADR 0019); the
+    // service pins the World to it from here.
+    [DEPLOYMENT_VERSION_VARIABLE]: version,
   };
 }
 
@@ -181,11 +193,12 @@ export function spawnService(
 
   const logFile = serviceLogPath(slug);
   const logOffset = existsSync(logFile) ? statSync(logFile).size : 0;
+  const bundle = builtBundleHash(factoryRoot);
   const pid = processes.spawn({
     command: process.execPath,
     args: [SERVICE_ENTRY],
     cwd: factoryRoot,
-    env: childEnv(),
+    env: childEnv((bundle ?? "").slice(0, VERSION_LENGTH)),
     logPath: logFile,
   });
   if (pid === undefined) {
@@ -211,7 +224,7 @@ export function spawnService(
       bootId: processes.bootId(),
       startTime: startTime ?? "",
       command: `${process.execPath} ${SERVICE_ENTRY}`,
-      bundle: builtBundleHash(factoryRoot),
+      bundle,
     },
     run: { logOffset },
   });

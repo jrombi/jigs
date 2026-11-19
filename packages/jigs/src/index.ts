@@ -140,6 +140,7 @@ export {
   ticketInputSchema,
   type WorkflowDefinition,
   type WorkflowInputs,
+  type WorkflowVersioning,
 } from "./workflow/factory.ts";
 export { installationNameSchema } from "./workflow/factory-schema.ts";
 export {

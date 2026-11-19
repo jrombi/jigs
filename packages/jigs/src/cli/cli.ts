@@ -9,6 +9,7 @@ import { bindRepo } from "./commands/bind.ts";
 import { listBindings } from "./commands/bindings.ts";
 import { buildFactoryService } from "./commands/build.ts";
 import { cancelRun } from "./commands/cancel.ts";
+import { listDeployments, makeCurrent, pruneDeployments } from "./commands/deployments.ts";
 import { runDoctor } from "./commands/doctor.ts";
 import { downFactory } from "./commands/down.ts";
 import { initFactory } from "./commands/init.ts";
@@ -72,6 +73,12 @@ Service process:
   service stop              Stop the service; Postgres keeps running
   service status            Report whether the service is running
   service logs              Show recent service output
+
+Versions:
+  deployments               List the versions that have run, which is current,
+                            and the runs each still owns
+  deployments current <v>   Make a version the factory; the others drain
+  deployments prune         Forget versions with no process and no runs
 
 Workflows and runs:
   workflows                 List the workflows the service can run
@@ -382,6 +389,31 @@ service
   })
   .action((options: { lines?: number }) => {
     serviceLogs({ out }, { lines: options.lines });
+  });
+
+const deploymentsCommand = program
+  .command("deployments")
+  .description(
+    "list this factory's deployment versions: which is current, and the runs each still owns",
+  )
+  .option("--json", "print one JSON document")
+  .action(async (options: { json?: boolean }) => {
+    await listDeployments({ out }, options);
+  });
+
+deploymentsCommand
+  .command("current")
+  .description("make a version the factory's current one; every other running version drains")
+  .argument("<version>", "the deployment version, as JIGS_DEPLOYMENT_VERSION names it")
+  .action(async (version: string) => {
+    await makeCurrent(version, { out });
+  });
+
+deploymentsCommand
+  .command("prune")
+  .description("forget every version that is not current, has no running process and owns no run")
+  .action(async () => {
+    await pruneDeployments({ out });
   });
 
 program

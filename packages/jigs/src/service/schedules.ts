@@ -8,7 +8,6 @@ import type { Factory, Schedule } from "../workflow/factory.ts";
 import { type ConfigProblem, issues } from "./event-triggers/validate.ts";
 import { type StartRunResult, startRun } from "./launch.ts";
 import { listRuns, type RunRow, scheduleTriggerId, scheduleTriggerLabel } from "./runs.ts";
-import { onShutdown } from "./shutdown.ts";
 
 // Five fields, minute to day-of-week: croner's default mode would also
 // accept a seconds field, and a schedule that fires sixty times an hour
@@ -33,9 +32,9 @@ export interface ScheduleDeps {
 }
 
 /**
- * Starts a job per valid schedule and returns them. A malformed schedule is
- * logged with its repair and left unscheduled: the service still starts, and
- * `jigs doctor` reports the same failure on demand.
+ * Starts a job per valid schedule and returns them; the caller stops each job when the copy
+ * stops being current or shuts down. A malformed schedule is logged with its repair and left
+ * unscheduled: the service still starts, and `jigs doctor` reports the same failure on demand.
  */
 export function startSchedules(factory: Factory, deps: ScheduleDeps = {}): Cron[] {
   const log = deps.log ?? console.log;
@@ -55,12 +54,6 @@ export function startSchedules(factory: Factory, deps: ScheduleDeps = {}): Cron[
       `[schedule] ${name} scheduled: ${schedule.cron} → ${schedule.workflow}, next ${isoOrNever(job.nextRun())}`,
     );
   }
-  // A tick that lands mid-drain would trigger a run into a queue that is
-  // closing under it. One closer per call, and the generated plugin calls this
-  // once per process.
-  onShutdown(() => {
-    for (const job of jobs) job.stop();
-  });
   return jobs;
 }
 

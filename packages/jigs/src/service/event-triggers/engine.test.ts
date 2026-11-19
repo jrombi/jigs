@@ -1160,7 +1160,7 @@ test("source params the source rejects fail the check", async () => {
 test("a factory declaring no triggers lists none and starts nothing", async () => {
   expect(await listTriggers({ workflows: {} })).toEqual([]);
   expect(triggerChecks({ workflows: {} })).toEqual([]);
-  expect(startTriggers({ workflows: {} }).triggers).toEqual([]);
+  expect(startTriggers({ workflows: {} }).engine.triggers).toEqual([]);
 });
 
 test("a failed arm at boot is retried by the next push, and the drain timer still runs", async () => {
@@ -1168,7 +1168,7 @@ test("a failed arm at boot is retried by the next push, and the drain timer stil
   const memory = memoryStore();
   let enables = 0;
   const lines: string[] = [];
-  const engine = startTriggers(factory({ pages: pagesTrigger }), {
+  const { engine } = startTriggers(factory({ pages: pagesTrigger }), {
     store: {
       ...memory.store,
       enable: async (trigger, now) => {

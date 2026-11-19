@@ -4,17 +4,19 @@
  * @packageDocumentation
  */
 
+import {
+  configuredDeploymentVersion,
+  WORLD_DEPLOYMENT_VARIABLE,
+} from "../config/deployment-version.ts";
 import { resolveService } from "../config/factory-config.ts";
 import { currentFactoryContext, seedFactoryContext } from "../config/factory-context.ts";
 import { JigsError } from "../errors.ts";
 import type { Factory, FactoryDefinition } from "../workflow/factory.ts";
 import { parseFactoryConfig } from "../workflow/factory-schema.ts";
 import { activeFactory } from "./active.ts";
-import { startAutomaticRelease } from "./automatic-release.ts";
 import { startWorld } from "./boot.ts";
-import { startDashboard } from "./dashboard.ts";
-import { startTriggers, withdrawInactive } from "./event-triggers/runner.ts";
-import { startSchedules } from "./schedules.ts";
+import { setDeploymentVersion } from "./role-state.ts";
+import { runAsVersion } from "./versioned.ts";
 
 export { type AppDeps, createApp } from "./app.ts";
 /** @internal */
@@ -43,25 +45,45 @@ export function listenOnServicePort(): void {
 }
 
 /**
- * Start everything the service runs beside its routes: the World behind its startup checks, the
- * dashboard, schedules, event triggers and automatic release. Call it once, from the service's
- * Nitro plugin, with the factory configuration the service was built from.
+ * Pin the World to this copy's deployment version, `JIGS_DEPLOYMENT_VERSION`, or exit naming what
+ * is wrong with it. Call it at the top level of the service's Nitro plugin, beside
+ * {@link listenOnServicePort}, before the World module is created.
+ */
+export function pinDeploymentVersion(): void {
+  try {
+    const version = configuredDeploymentVersion(currentFactoryContext());
+    // biome-ignore lint/style/noProcessEnv: the SDK's own setting, derived from the factory's
+    process.env[WORLD_DEPLOYMENT_VARIABLE] = version;
+    setDeploymentVersion(version);
+  } catch (err) {
+    if (!(err instanceof JigsError)) throw err;
+    console.error(`[service] ${err.message}${err.hint === undefined ? "" : `\n${err.hint}`}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Start everything the service runs beside its routes: the World behind its startup checks, then
+ * this copy's role as a deployment version, which is what runs the dashboard, schedules, event
+ * triggers, automatic release and the hub client while the copy is current. Call it once, from
+ * the service's Nitro plugin, with the factory configuration the service was built from.
  */
 export function startService(factory: Factory, config: FactoryDefinition): void {
   seedFactoryContext(parseFactoryConfig(config));
-  // Started in this order and never awaited, the way Nitro runs separate
-  // plugins: each later part waits on the World's readiness itself.
   const live = activeFactory(factory);
+  logInactive(factory, live);
+  // Neither is awaited, the way Nitro runs separate plugins: the role waits
+  // on the World's readiness itself.
   void startWorld(live);
-  void startDashboard();
+  void runAsVersion(factory, live).catch((error: unknown) => {
+    console.error(`[service] could not take a deployment role: ${String(error)}`);
+    process.exit(1);
+  });
+}
+
+function logInactive(factory: Factory, live: Factory): void {
   for (const name of Object.keys(factory.schedules ?? {}))
     if (live.schedules?.[name] === undefined) console.log(`[schedule] ${name} inactive`);
-  const inactive = Object.keys(factory.triggers ?? {}).filter(
-    (name) => live.triggers?.[name] === undefined,
-  );
-  for (const name of inactive) console.log(`[trigger] ${name} inactive`);
-  startSchedules(live);
-  startTriggers(live);
-  void withdrawInactive(inactive);
-  startAutomaticRelease(factory);
+  for (const name of Object.keys(factory.triggers ?? {}))
+    if (live.triggers?.[name] === undefined) console.log(`[trigger] ${name} inactive`);
 }

@@ -5,7 +5,6 @@ import { registrySql } from "../../steps/runtime/registry.ts";
 import type { Factory } from "../../workflow/factory.ts";
 import type { Provider } from "../../workflow/providers.ts";
 import { whenReady } from "../readiness.ts";
-import { onShutdown } from "../shutdown.ts";
 import { createTriggerEngine, type TriggerDeps, type TriggerEngine } from "./engine.ts";
 import type { PushedEvent } from "./sources.ts";
 import { type Occurrence, type TriggerStore, triggerStore } from "./store.ts";
@@ -26,14 +25,21 @@ let running: TriggerEngine | undefined;
 // whether an occurrence was this factory's.
 let retired = false;
 
+/** The running triggers, and how to stop them before the World closes. */
+export interface StartedTriggers {
+  engine: TriggerEngine;
+  /** Stops admitting pushes and drains the starts in flight. Safe to call twice. */
+  stop(): Promise<void>;
+}
+
 /**
  * Starts the factory's event triggers once the service is ready: leftover
  * pending occurrences first, then whatever pushed events record, until the
- * service shuts down.
+ * caller stops them.
  */
-export function startTriggers(factory: Factory, deps: StartTriggersDeps = {}): TriggerEngine {
+export function startTriggers(factory: Factory, deps: StartTriggersDeps = {}): StartedTriggers {
   const engine = createTriggerEngine(factory, deps);
-  if (engine.triggers.length === 0) return engine;
+  if (engine.triggers.length === 0) return { engine, stop: async () => {} };
   running = engine;
   const log = deps.log ?? console.log;
   const setTimer =
@@ -45,10 +51,11 @@ export function startTriggers(factory: Factory, deps: StartTriggersDeps = {}): T
     });
   let cancel = () => {};
   let stopped = false;
-  // Quiesce, not close: a start still in flight needs the World and the
-  // registry pool that the close phase ends.
-  onShutdown(
-    async () => {
+  // Before the World closes: a start still in flight needs the World and the
+  // registry pool.
+  let stopping: Promise<void> | undefined;
+  const stop = () => {
+    stopping ??= (async () => {
       stopped = true;
       cancel();
       if (running === engine) {
@@ -56,9 +63,9 @@ export function startTriggers(factory: Factory, deps: StartTriggersDeps = {}): T
         retired = true;
       }
       await engine.stop();
-    },
-    { phase: "quiesce" },
-  );
+    })();
+    return stopping;
+  };
 
   const drainAgain = () => {
     if (!stopped) cancel = setTimer(() => void engine.drain().then(drainAgain), DRAIN_INTERVAL_MS);
@@ -80,7 +87,7 @@ export function startTriggers(factory: Factory, deps: StartTriggersDeps = {}): T
       log(`[trigger] event triggers not started: ${String(error)}`);
     }
   })();
-  return engine;
+  return { engine, stop };
 }
 
 /**

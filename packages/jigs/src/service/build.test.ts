@@ -30,8 +30,10 @@ test("the service plugin is generated beside the entry and starts the factory's 
   expect(source).toContain('from "./server.ts"');
   expect(source).toContain('from "../jigs.config.ts"');
   expect(source).toContain("startService(factory, config)");
-  // At the top level, so PORT is set before Nitro's server entry reads it.
+  // At the top level, so PORT is set before Nitro's server entry reads it, and
+  // the deployment version before the World is created.
   expect(source).toMatch(/^listenOnServicePort\(\);$/m);
+  expect(source).toMatch(/^pinDeploymentVersion\(\);$/m);
 });
 
 test("preparing writes the entry, the plugin and the step files, dropping what an earlier release wrote", () => {

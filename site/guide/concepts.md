@@ -141,6 +141,43 @@ const agents = {
 Workflows operate above this layer, so different parts of one workflow can use
 different harnesses, direct model calls or ordinary code.
 
+## Versions and draining {#versions}
+
+Every running copy of a factory carries a deployment version, and the Workflow
+SDK pins each run to the version that started it: only that version's service
+executes the run's steps. One version is current, made so by
+[`jigs deployments current`](/guide/cli#versions); it is the factory, and it
+alone hears the hub, fires triggers and schedules, releases resources and
+serves the dashboard and the API. Any other running version drains.
+
+A draining version keeps its queue worker, so a step that is executing finishes
+where it started. Whenever one of its runs is parked, with no step executing
+and nothing queued for it, it hands the run to the current version, provided
+the current build still has every workflow and step the run recorded. A parked
+run loses nothing by moving: its next wake lands on the current version. Once
+the draining version owns no run, it logs that it is retiring and exits with
+code 0. What that exit means is up to whatever started it: a container
+platform or a systemd unit treats it as the end of that task.
+
+A version whose process is gone, after a crash or a `jigs up` restart, has its
+runs adopted by the current version within a minute, queued work included.
+
+Each workflow chooses with `versioning` in `defineWorkflow`:
+
+```ts
+export default defineWorkflow({ inputs, workflow: review, versioning: "pinned" });
+```
+
+- `auto-upgrade`, the default: a parked run follows the current version, as
+  above.
+- `pinned`: every run stays on the version that started it until the run ends,
+  so a long agent run finishes on the code it began with. That version keeps
+  running until then, and `jigs deployments` shows how many runs it still owns.
+
+A reply or a Stop in a Linear agent session reaches an agent's running turn
+whichever version runs it: the current version receives the event and relays
+it through the factory's database to the copy holding the turn.
+
 ## Factories and repositories
 
 Your workflows live in a **factory**, separate from the repositories they

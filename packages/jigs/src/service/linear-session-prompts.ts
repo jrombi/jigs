@@ -6,9 +6,11 @@
 import { getHookByToken } from "workflow/api";
 import { HookNotFoundError } from "workflow/errors";
 import { z } from "zod";
+import { currentFactoryContext } from "../config/factory-context.ts";
 import { derivedUuid, linearFor } from "../providers/linear.ts";
 import { type LinearAgentApi, linearAgentFor, onceActivityId } from "../providers/linear-agent.ts";
 import { liveTurn } from "../steps/agents/shared/live-turns.ts";
+import { registrySql } from "../steps/runtime/registry.ts";
 import {
   linearListeningToken,
   linearSessionToken,
@@ -16,6 +18,7 @@ import {
 } from "../workflow/linear/agent-session.ts";
 import { recordedOccurrences, withdrawOccurrence } from "./event-triggers/runner.ts";
 import type { Occurrence } from "./event-triggers/store.ts";
+import { awaitTaken, leaveLiveTurnMessage, type RelayedMessage } from "./live-turn-relay.ts";
 import { cancelRun, runStatuses } from "./runs.ts";
 import { wake } from "./wake.ts";
 
@@ -63,6 +66,11 @@ const WAITING =
 /** What routing a session's prompts reaches. Tests replace it; the service uses the defaults. */
 export interface SessionPromptDeps {
   liveTurn: typeof liveTurn;
+  /**
+   * Leave a message for a live turn in another copy, and say whether one took it within the
+   * relay's grace. Only asked when no live turn runs here.
+   */
+  relay: (token: string, message: RelayedMessage) => Promise<boolean>;
   wake: typeof wake;
   linear: (
     installationName: string,
@@ -79,6 +87,11 @@ export interface SessionPromptDeps {
 
 export const sessionPromptDeps: SessionPromptDeps = {
   liveTurn,
+  relay: async (token, message) => {
+    const db = registrySql();
+    const id = await leaveLiveTurnMessage(db, currentFactoryContext().slug, token, message);
+    return awaitTaken(db, id);
+  },
   wake,
   linear: (installationName) => linearAgentFor(installationName),
   appName: async (installationName) => (await linearFor(installationName).appUser()).name,
@@ -146,13 +159,20 @@ export async function routeSessionPrompt(
   const stop = prompt.signal === "stop";
   const live = deps.liveTurn(token);
   // Every other signal is a reply: its body is what the person chose or said.
-  if (stop) live?.stop();
-  else
-    live?.inject({
-      uuid: prompt.id,
-      author: prompt.user?.name ?? "Someone",
-      text: prompt.content.body ?? "",
-    });
+  const relayed: RelayedMessage = stop
+    ? { kind: "stop" }
+    : {
+        kind: "inject",
+        message: {
+          uuid: prompt.id,
+          author: prompt.user?.name ?? "Someone",
+          text: prompt.content.body ?? "",
+        },
+      };
+  if (live !== undefined) {
+    if (relayed.kind === "stop") live.stop();
+    else live.inject(relayed.message);
+  }
   // Woken even when the live turn took the message: one that fails drops the
   // messages after it, and the wake makes the listening run read them again.
   const woke = await deps.wake(
@@ -161,7 +181,12 @@ export async function routeSessionPrompt(
   );
   if (woke.outcome === "failed") throw new Error(`could not wake the listening run: ${woke.error}`);
   const at = `${stop ? "stop" : "reply"} session=${session.sessionId} activity=${prompt.id}`;
-  if (live !== undefined || woke.outcome === "woken") {
+  // The turn may run in another copy of this factory, which takes the message
+  // through the relay. Waited for only when nothing here settled the prompt,
+  // so a reply that reached a turn elsewhere is never also answered as unread.
+  const taken =
+    live === undefined && woke.outcome !== "woken" && (await deps.relay(token, relayed));
+  if (live !== undefined || taken || woke.outcome === "woken") {
     console.log(`[events] linear accepted ${at}`);
     if (stop) awaitStop(session, prompt, deps);
     return "woken";

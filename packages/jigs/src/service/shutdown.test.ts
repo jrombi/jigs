@@ -44,6 +44,25 @@ test("SIGTERM runs every closer, registered before or after install, then exits 
   expect(h.logs[0]).toBe("[service] SIGTERM received, shutting down");
 });
 
+test("a shutdown the service begins itself runs the closers and exits 0, naming its reason", async () => {
+  const h = harness();
+  const ran: string[] = [];
+  h.shutdown.onShutdown(() => {
+    ran.push("closed");
+  });
+  h.install();
+
+  h.shutdown.begin("version v1 drained", {
+    exit: (code) => h.exits.push(code),
+    log: (line) => h.logs.push(line),
+  });
+  await exited(h.exits);
+
+  expect(ran).toEqual(["closed"]);
+  expect(h.exits).toEqual([0]);
+  expect(h.logs[0]).toBe("[service] version v1 drained, shutting down");
+});
+
 test("a closer that rejects is logged and does not stop the others", async () => {
   const h = harness();
   let closed = false;

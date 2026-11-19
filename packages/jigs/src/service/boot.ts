@@ -256,8 +256,8 @@ export async function gateOnWorldStart(deps: WorldStartGateDeps): Promise<boolea
 }
 
 /**
- * Run the ordered service startup gates, then enable readiness and start the hub client when this
- * copy has a hub connection. `live` is the factory with only its active triggers and schedules.
+ * Run the ordered service startup gates, then enable readiness. `live` is the factory with only
+ * its active triggers and schedules.
  */
 export async function startWorld(live: Factory) {
   // First of all, ahead of any gate that can hold the boot: a `jigs service
@@ -302,24 +302,4 @@ export async function startWorld(live: Factory) {
   console.log(`[service] world started: ${world}`);
 
   setBootPhase(READY_PHASE);
-
-  await startHub(await serviceContext());
-}
-
-// The hub keeps what it holds until it is confirmed, so whatever arrived while
-// the service was down comes first. startService started the triggers before
-// this boot reached readiness, and a push waits for them to be enabled.
-async function startHub(ctx: FactoryContext): Promise<void> {
-  const [{ startHubClient }, { pushEvent }, { hubConnection }] = await Promise.all([
-    import("./hub-client.ts"),
-    import("./event-triggers/runner.ts"),
-    import("../providers/hub.ts"),
-  ]);
-  const hub = hubConnection(ctx);
-  if (hub === undefined) return;
-  const client = startHubClient({
-    ...hub,
-    route: { context: ctx, push: pushEvent },
-  });
-  onShutdown(() => client.stop(), { phase: "quiesce" });
 }

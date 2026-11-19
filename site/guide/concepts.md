@@ -165,6 +165,16 @@ runs adopted by the current version within a minute, queued work included.
 Each workflow chooses with `versioning` in `defineWorkflow`:
 
 ```ts
+import { defineWorkflow, type WorkflowInputs } from "@jigs-ai/jigs";
+import { z } from "zod";
+
+const inputs = z.object({ ticket: z.string() });
+
+export async function review(input: WorkflowInputs<typeof inputs>) {
+  "use workflow";
+  return input.ticket;
+}
+
 export default defineWorkflow({ inputs, workflow: review, versioning: "pinned" });
 ```
 

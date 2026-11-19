@@ -46,11 +46,12 @@ afterAll(async () => {
 const FACTORY = "factory-a";
 const process_ = { pid: 4242, host: "box", ids: ["workflow//./workflows/a//a"] };
 
-async function insertRun(id: string, deploymentId: string, status = "running") {
+// A run started on `home` and driven by `owner`, as after a hand-over.
+async function insertRun(id: string, owner: string, status = "running", home = "v0") {
   await db.$client.query(
-    `insert into "workflow"."workflow_runs" (id, name, status, deployment_id, created_at, updated_at)
-     values ($1, 'workflow//./workflows/a//a', $2, $3, now(), now())`,
-    [id, status, deploymentId],
+    `insert into "workflow"."workflow_runs" (id, name, status, deployment_id, job_prefix, created_at, updated_at)
+     values ($1, 'workflow//./workflows/a//a', $2, $3, $4, now(), now())`,
+    [id, status, home, `workflow_${owner}_`],
   );
 }
 
@@ -72,7 +73,7 @@ dbTest(
     });
 
     const later = new Date(Date.now() + 2 * 60_000);
-    expect((await listDeployments(db, FACTORY, later))[0]?.role).toBe("gone");
+    expect((await listDeployments(db, FACTORY, undefined, later))[0]?.role).toBe("gone");
     await touchDeployment(db, FACTORY, "v1");
     expect((await listDeployments(db, FACTORY))[0]?.role).toBe("draining");
   },
@@ -106,7 +107,7 @@ dbTest(
   },
 );
 
-dbTest("the listing counts the live runs the World pins to each version", async () => {
+dbTest("the listing counts the live runs each version drives, wherever they started", async () => {
   await insertRun("wrun_01STORE000000000000000000A", "v1");
   await insertRun("wrun_01STORE000000000000000000B", "v1", "pending");
   await insertRun("wrun_01STORE000000000000000000C", "v1", "completed");
@@ -124,7 +125,7 @@ dbTest(
   async () => {
     const later = new Date(Date.now() + 2 * 60_000);
     // v1: gone but owns runs. v2: current. v3: gone, owns nothing.
-    expect(await pruneDeployments(db, FACTORY, later)).toEqual(["v3"]);
+    expect(await pruneDeployments(db, FACTORY, undefined, later)).toEqual(["v3"]);
     expect((await listDeployments(db, FACTORY)).map((view) => view.version).sort()).toEqual([
       "v1",
       "v2",

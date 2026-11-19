@@ -13,10 +13,12 @@ import { builtIds } from "./built-ids.ts";
 import { startDashboard } from "./dashboard.ts";
 import {
   adoptRuns,
+  forwardOwnedJobs,
   handOverParkedRuns,
   ownedRunCount,
   queuedJobCount,
 } from "./deployments/hand-over.ts";
+import { startJobForwarding } from "./deployments/job-forwarding.ts";
 import {
   currentDeployment,
   DEPLOYMENTS_CHANNEL,
@@ -72,6 +74,15 @@ export async function runAsVersion(factory: Factory, live: Factory): Promise<voi
   onShutdown(() => relay.stop(), { phase: "quiesce" });
 
   const jobPrefix = configuredJobPrefix(ctx);
+  const own = { version, jobPrefix };
+  const forwarding = startJobForwarding({
+    listener,
+    forward: () => forwardOwnedJobs(db, own),
+    setTimer,
+    log: console.log,
+  });
+  onShutdown(() => forwarding.stop(), { phase: "quiesce" });
+
   const pinned = pinnedWorkflows(factory);
   const controller = startRoleController({
     version,
@@ -84,7 +95,6 @@ export async function runAsVersion(factory: Factory, live: Factory): Promise<voi
     startFull: () => startFullRole(factory, live, ctx),
     housekeep: async (role, current) => {
       const deps = { db, factory: slug, jobPrefix, pinned, log: console.log };
-      const own = { version, jobPrefix };
       if (role === "current") {
         await adoptAbandonedRuns(deps, version);
         return { owned: 0, queued: 0 };
@@ -106,7 +116,7 @@ async function adoptAbandonedRuns(
   deps: Parameters<typeof adoptRuns>[0],
   version: string,
 ): Promise<void> {
-  const gone = (await listDeployments(deps.db, deps.factory)).filter(
+  const gone = (await listDeployments(deps.db, deps.factory, deps.jobPrefix)).filter(
     (view) => view.role === "gone" && view.runs > 0,
   );
   for (const view of gone)

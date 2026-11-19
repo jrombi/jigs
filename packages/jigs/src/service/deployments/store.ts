@@ -4,6 +4,7 @@
 
 import { and, eq, sql } from "drizzle-orm";
 import { boolean, integer, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import { DEFAULT_JOB_PREFIX, deploymentJobPrefix } from "../../config/deployment-version.ts";
 import type { RegistrySql } from "../../steps/runtime/registry.ts";
 
 // Keyed by factory like jigs_resources: several factories may share one database.
@@ -147,7 +148,7 @@ export interface DeploymentView {
   madeCurrentAt: string | null;
   pid: number | null;
   host: string | null;
-  /** The live runs the World pins to this version. */
+  /** The live runs this version drives. */
   runs: number;
 }
 
@@ -168,6 +169,7 @@ export function roleOf(
 export async function listDeployments(
   db: RegistrySql,
   factory: string,
+  jobPrefix: string = DEFAULT_JOB_PREFIX,
   now: Date = new Date(),
 ): Promise<DeploymentView[]> {
   const rows = await db
@@ -184,28 +186,29 @@ export async function listDeployments(
     madeCurrentAt: row.madeCurrentAt?.toISOString() ?? null,
     pid: row.pid,
     host: row.host,
-    runs: owned.get(row.version) ?? 0,
+    runs: owned.get(deploymentJobPrefix(jobPrefix, row.version)) ?? 0,
   }));
 }
 
-// The World's own table: a run's `deployment_id` is the version that owns it.
+// The World's own table: a run's `job_prefix` names the version that drives it.
 async function ownedRunCounts(db: RegistrySql): Promise<Map<string, number>> {
-  const { rows } = await db.execute<{ version: string; runs: number }>(sql`
-    select deployment_id as version, count(*)::int as runs
+  const { rows } = await db.execute<{ jobPrefix: string; runs: number }>(sql`
+    select job_prefix as "jobPrefix", count(*)::int as runs
     from "workflow"."workflow_runs"
-    where status in ('pending', 'running') and deployment_id is not null
-    group by deployment_id
+    where status in ('pending', 'running') and job_prefix is not null
+    group by job_prefix
   `);
-  return new Map(rows.map((row) => [row.version, row.runs]));
+  return new Map(rows.map((row) => [row.jobPrefix, row.runs]));
 }
 
 /** Remove every version that is not current, owns no run and has no running process. */
 export async function pruneDeployments(
   db: RegistrySql,
   factory: string,
+  jobPrefix: string = DEFAULT_JOB_PREFIX,
   now: Date = new Date(),
 ): Promise<string[]> {
-  const listed = await listDeployments(db, factory, now);
+  const listed = await listDeployments(db, factory, jobPrefix, now);
   const removable = listed.filter((view) => view.role === "gone" && view.runs === 0);
   for (const view of removable) {
     await db

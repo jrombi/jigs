@@ -1,14 +1,12 @@
-// Moving a parked run from one deployment version to another (ADR 0019): a
-// run with no step executing, no delivery driving it and no job queued on its
-// version's task loses nothing by changing owner, and its next wake then lands
-// on the new owner's task.
+// Moving a parked run from one deployment version to another (ADR 0019). A
+// run keeps the deployment it started on, its home: the SDK seeds a run's
+// replay with it, so changing it makes every replay diverge. What moves is the
+// owner, the World's `job_prefix`: the version whose worker drives the run and
+// recovers it on boot. Messages still address the home's task, so the owner
+// forwards them to its own (see `forwardOwnedJobs`).
 
 import { sql } from "drizzle-orm";
-import {
-  deploymentJobPrefix,
-  deploymentTasks,
-  UNPINNED_DEPLOYMENT_ID,
-} from "../../config/deployment-version.ts";
+import { deploymentJobPrefix, deploymentTasks } from "../../config/deployment-version.ts";
 import type { RegistrySql } from "../../steps/runtime/registry.ts";
 import { publishedIds } from "./store.ts";
 
@@ -20,7 +18,7 @@ export interface ParkedRun {
   specVersion: number | null;
 }
 
-/** The runs the World pins to `version`, or to no version when `version` is null. */
+/** The runs a version's worker drives, or a copy with no version's when `version` is null. */
 export interface RunOwner {
   version: string | null;
   jobPrefix: string;
@@ -28,21 +26,26 @@ export interface RunOwner {
 
 const LIVE = sql`r.status in ('pending', 'running')`;
 
-// The World records a run of a copy with no version under its reserved unpinned id.
+const ownerPrefix = (owner: RunOwner) =>
+  owner.version === null ? owner.jobPrefix : deploymentJobPrefix(owner.jobPrefix, owner.version);
+
+// The World recovers a run with no prefix (one older than the column) into
+// every copy, so it belongs to whichever copy has no version.
 const ownedBy = (owner: RunOwner) =>
-  sql`r.deployment_id = ${owner.version ?? UNPINNED_DEPLOYMENT_ID}`;
+  owner.version === null
+    ? sql`(r.job_prefix = ${owner.jobPrefix} or r.job_prefix is null)`
+    : sql`r.job_prefix = ${ownerPrefix(owner)}`;
 
 // Graphile stores the message body base64-encoded in the job payload, and the
 // run id is ASCII inside it, whichever way the transport serialized the body.
-const parked = (owner: RunOwner) => sql`
+const jobNamesRun = (job: string, runId: unknown) =>
+  sql`position(convert_to(${runId}, 'UTF8') in decode(${sql.raw(job)}.payload->>'data', 'base64')) > 0`;
+
+// A job on any task counts: a run's messages land on its home's task, whoever owns it.
+const parked = sql`
   not exists (select 1 from "workflow"."workflow_steps" a where a.run_id = r.id and a.status = 'running')
   and not exists (select 1 from "workflow"."workflow_run_delivery_leases" l where l.run_id = r.id)
-  and not exists (
-    select 1 from graphile_worker.jobs j
-    join graphile_worker._private_jobs b on b.id = j.id
-    where j.task_identifier = any(${sql.param(deploymentTasks(owner.jobPrefix, owner.version))}::text[])
-      and position(r.id in convert_from(decode(b.payload->>'data', 'base64'), 'UTF8')) > 0
-  )`;
+  and not exists (select 1 from graphile_worker._private_jobs b where ${jobNamesRun("b", sql`r.id`)})`;
 
 /** Every parked run `owner` holds, oldest first. */
 export async function parkedRuns(db: RegistrySql, owner: RunOwner): Promise<ParkedRun[]> {
@@ -56,7 +59,7 @@ export async function parkedRuns(db: RegistrySql, owner: RunOwner): Promise<Park
       array_remove(array_agg(distinct s.step_name), null) as "stepIds"
     from "workflow"."workflow_runs" r
     left join "workflow"."workflow_steps" s on s.run_id = r.id
-    where ${ownedBy(owner)} and ${LIVE} and ${parked(owner)}
+    where ${ownedBy(owner)} and ${LIVE} and ${parked}
     group by r.id
     order by r.created_at
   `);
@@ -81,8 +84,8 @@ export async function queuedJobCount(db: RegistrySql, owner: RunOwner): Promise<
 }
 
 /**
- * Re-point one run at `to`, provided it is still parked and still `from`'s. One statement, so
- * the check and the change see one snapshot. True when the run moved.
+ * Make `to` the owner of one run, provided it is still parked and still `from`'s. One statement,
+ * so the check and the change see one snapshot. True when the run moved.
  */
 export async function moveRun(
   db: RegistrySql,
@@ -92,8 +95,8 @@ export async function moveRun(
 ): Promise<boolean> {
   const result = await db.execute(sql`
     update "workflow"."workflow_runs" r
-    set deployment_id = ${to.version}, job_prefix = ${deploymentJobPrefix(to.jobPrefix, to.version)}
-    where r.id = ${run.runId} and ${ownedBy(from)} and ${LIVE} and ${parked(from)}
+    set job_prefix = ${deploymentJobPrefix(to.jobPrefix, to.version)}
+    where r.id = ${run.runId} and ${ownedBy(from)} and ${LIVE} and ${parked}
   `);
   return result.rowCount === 1;
 }
@@ -210,7 +213,7 @@ async function moveQueuedJobs(
       from graphile_worker._private_tasks target, graphile_worker._private_tasks source
       where target.identifier = ${toTask} and source.identifier = ${fromTask}
         and j.task_id = source.id
-        and position(${runId} in convert_from(decode(j.payload->>'data', 'base64'), 'UTF8')) > 0
+        and ${jobNamesRun("j", runId)}
     `);
   }
 }
@@ -230,7 +233,7 @@ export async function adoptRun(
     await moveQueuedJobs(locked, run.runId, from, to);
     const result = await locked.execute(sql`
       update "workflow"."workflow_runs" r
-      set deployment_id = ${to.version}, job_prefix = ${deploymentJobPrefix(to.jobPrefix, to.version)}
+      set job_prefix = ${deploymentJobPrefix(to.jobPrefix, to.version)}
       where r.id = ${run.runId} and ${ownedBy(from)} and ${LIVE}
     `);
     return result.rowCount === 1;
@@ -270,4 +273,30 @@ export async function adoptRuns(
     deps.log(`[service] run ${run.runId} adopted from ${describe(from)} by version ${to}`);
   }
   return report;
+}
+
+/**
+ * Move every waiting job for a run `owner` drives from another version's flows task to its own,
+ * and return how many moved. A message for a run goes to its home's task, which after a
+ * hand-over is not its owner's; a job some worker already locked is left to that worker.
+ */
+export async function forwardOwnedJobs(db: RegistrySql, owner: RunOwner): Promise<number> {
+  const [ownFlows] = deploymentTasks(owner.jobPrefix, owner.version);
+  await db.execute(
+    sql`insert into graphile_worker._private_tasks (identifier) values (${ownFlows}) on conflict do nothing`,
+  );
+  const result = await db.execute(sql`
+    update graphile_worker._private_jobs j
+    set task_id = target.id, updated_at = now()
+    from graphile_worker._private_tasks target, graphile_worker._private_tasks source
+    where target.identifier = ${ownFlows}
+      and j.task_id = source.id and source.identifier <> ${ownFlows}
+      and starts_with(source.identifier, ${owner.jobPrefix}) and right(source.identifier, 5) = 'flows'
+      and j.locked_at is null
+      and exists (
+        select 1 from "workflow"."workflow_runs" r
+        where ${ownedBy(owner)} and ${LIVE} and ${jobNamesRun("j", sql`r.id`)}
+      )
+  `);
+  return result.rowCount ?? 0;
 }

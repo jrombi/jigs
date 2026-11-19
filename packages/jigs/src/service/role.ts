@@ -11,7 +11,7 @@ export interface RoleParts {
 }
 
 export interface DrainReport {
-  /** Live runs still pinned to this version. */
+  /** Live runs this version still drives. */
   owned: number;
   /** Jobs still waiting or locked on this version's task. */
   queued: number;

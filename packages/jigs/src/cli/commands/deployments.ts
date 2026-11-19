@@ -1,4 +1,4 @@
-import { validateDeploymentVersion } from "../../config/deployment-version.ts";
+import { configuredJobPrefix, validateDeploymentVersion } from "../../config/deployment-version.ts";
 import { currentFactoryContext } from "../../config/factory-context.ts";
 import { JigsError } from "../../errors.ts";
 import { FACTORY_ENVIRONMENT } from "../../providers/credentials.ts";
@@ -54,7 +54,7 @@ export async function listDeployments(
 ): Promise<DeploymentView[]> {
   const now = deps.now ?? (() => new Date());
   const views = await withRegistry(deps, (sql, factory, m) =>
-    m.listDeployments(sql, factory, now()),
+    m.listDeployments(sql, factory, configuredJobPrefix(currentFactoryContext()), now()),
   );
   if (options.json === true) {
     deps.out(JSON.stringify({ deployments: views }, null, 2));
@@ -109,7 +109,7 @@ export async function makeCurrent(version: string, deps: DeploymentsDeps): Promi
 export async function pruneDeployments(deps: DeploymentsDeps): Promise<string[]> {
   const now = deps.now ?? (() => new Date());
   const removed = await withRegistry(deps, (sql, factory, m) =>
-    m.pruneDeployments(sql, factory, now()),
+    m.pruneDeployments(sql, factory, configuredJobPrefix(currentFactoryContext()), now()),
   );
   if (removed.length === 0)
     deps.out("nothing to prune: every version is current, running or owns runs");

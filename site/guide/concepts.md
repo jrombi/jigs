@@ -143,9 +143,9 @@ different harnesses, direct model calls or ordinary code.
 
 ## Versions and draining {#versions}
 
-Every running copy of a factory carries a deployment version, and the Workflow
-SDK pins each run to the version that started it: only that version's service
-executes the run's steps. One version is current, made so by
+Every running copy of a factory carries a deployment version, and each run is
+driven by one version at a time: the one that started it, until it is handed
+over. One version is current, made so by
 [`jigs deployments current`](/guide/cli#versions); it is the factory, and it
 alone hears the hub, fires triggers and schedules, releases resources and
 serves the dashboard and the API. Any other running version drains.
@@ -154,9 +154,9 @@ A draining version keeps its queue worker, so a step that is executing finishes
 where it started. Whenever one of its runs is parked, with no step executing
 and nothing queued for it, it hands the run to the current version, provided
 the current build still has every workflow and step the run recorded. A parked
-run loses nothing by moving: its next wake lands on the current version. Once
-the draining version owns no run, it logs that it is retiring and exits with
-code 0. What that exit means is up to whatever started it: a container
+run loses nothing by moving: its next wake is carried to the current version.
+Once the draining version owns no run, it logs that it is retiring and exits
+with code 0. What that exit means is up to whatever started it: a container
 platform or a systemd unit treats it as the end of that task.
 
 A version whose process is gone, after a crash or a `jigs up` restart, has its

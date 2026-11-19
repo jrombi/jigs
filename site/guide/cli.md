@@ -209,8 +209,8 @@ unit also kills the service and its agents, so stop the factory with
 
 ## Versions
 
-Every running copy of a factory is a **deployment version**: the string the
-service pins its runs to. One version is **current**: it is the factory. It
+Every running copy of a factory is a **deployment version**: the name of the
+build that drives a run. One version is **current**: it is the factory. It
 hears the hub, fires triggers and schedules, releases resources and serves the
 dashboard and the API. Every other running version **drains**: it keeps only
 its queue worker for the runs it still owns, hands each run that is parked to

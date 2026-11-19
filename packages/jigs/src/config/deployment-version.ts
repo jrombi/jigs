@@ -1,5 +1,5 @@
-// A copy's deployment version: the string the World pins runs to, and the
-// Graphile task its queue worker claims (ADR 0019). Hosted copies set it in
+// A copy's deployment version: the World's deployment id for the runs the
+// copy starts, and the Graphile task its queue worker claims (ADR 0019). Hosted copies set it in
 // their environment; `jigs up` sets it from the built bundle's hash.
 
 import { JigsError } from "../errors.ts";

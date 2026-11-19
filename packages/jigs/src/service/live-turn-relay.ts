@@ -34,6 +34,20 @@ const RELAY_POLL_MS = 250;
 
 export type RelayedMessage = { kind: "inject"; message: ConversationMessage } | { kind: "stop" };
 
+/** Hand `relayed` to a live turn: a stop stops it, a reply is injected into it. */
+export function deliverToLiveTurn(turn: LiveTurn, relayed: RelayedMessage): void {
+  if (relayed.kind === "stop") turn.stop();
+  else turn.inject(relayed.message);
+}
+
+type LiveTurnMessageRow = typeof liveTurnMessages.$inferSelect;
+
+function relayedMessageOf(row: LiveTurnMessageRow): RelayedMessage | undefined {
+  if (row.kind === "stop") return { kind: "stop" };
+  if (row.payload === null) return undefined;
+  return { kind: "inject", message: row.payload };
+}
+
 /** Leave `relayed` for whichever copy holds the live turn `token`, and announce it. Returns the row's id. */
 export async function leaveLiveTurnMessage(
   db: RegistrySql,
@@ -112,8 +126,8 @@ export async function takeLiveTurnMessages(
       .where(and(eq(liveTurnMessages.id, row.id), isNull(liveTurnMessages.takenAt)))
       .returning({ id: liveTurnMessages.id });
     if (claimed.length === 0) continue;
-    if (row.kind === "stop") turn.stop();
-    else if (row.payload !== null) turn.inject(row.payload);
+    const relayed = relayedMessageOf(row);
+    if (relayed !== undefined) deliverToLiveTurn(turn, relayed);
     took += 1;
   }
   return took;
@@ -131,9 +145,9 @@ export interface LiveTurnRelayDeps {
 /** Start taking relayed messages for the live turns of this copy, until stopped. */
 export function startLiveTurnRelay(deps: LiveTurnRelayDeps): { stop: () => void } {
   const log = deps.log ?? ((line: string) => console.log(line));
-  const held = deps.liveTurn ?? liveTurn;
-  const take = async (token: string) => {
-    const turn = held(token);
+  const liveTurnHeldHere = deps.liveTurn ?? liveTurn;
+  const takeMessagesFor = async (token: string) => {
+    const turn = liveTurnHeldHere(token);
     if (turn === undefined) return;
     try {
       const took = await takeLiveTurnMessages(deps.db(), deps.factory, token, turn);
@@ -142,11 +156,15 @@ export function startLiveTurnRelay(deps: LiveTurnRelayDeps): { stop: () => void 
       console.error(`[events] could not take relayed messages for ${token}: ${String(error)}`);
     }
   };
-  const unsubscribe = deps.listener.subscribe(LIVE_TURNS_CHANNEL, (token) => void take(token), {
-    // Whatever was announced while the connection was down waits in the table.
-    onConnect: () => {
-      for (const token of (deps.liveTurnTokens ?? liveTurnTokens)()) void take(token);
+  const unsubscribe = deps.listener.subscribe(
+    LIVE_TURNS_CHANNEL,
+    (token) => void takeMessagesFor(token),
+    {
+      // Whatever was announced while the connection was down waits in the table.
+      onConnect: () => {
+        for (const token of (deps.liveTurnTokens ?? liveTurnTokens)()) void takeMessagesFor(token);
+      },
     },
-  });
+  );
   return { stop: unsubscribe };
 }

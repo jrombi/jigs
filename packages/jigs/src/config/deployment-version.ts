@@ -29,17 +29,7 @@ export function validateDeploymentVersion(
   version: string,
   jobPrefix: string = DEFAULT_JOB_PREFIX,
 ): string {
-  const maxLength = MAX_JOB_PREFIX_LENGTH - jobPrefix.length - 1;
-  const reason =
-    version === ""
-      ? "it is empty"
-      : !VERSION_SHAPE.test(version)
-        ? "it may only use letters, digits, '.', '-', '_' and '@'"
-        : version === UNPINNED_DEPLOYMENT_ID
-          ? `"${UNPINNED_DEPLOYMENT_ID}" is reserved by the World`
-          : version.length > maxLength
-            ? `it is longer than ${maxLength} characters`
-            : undefined;
+  const reason = whyVersionIsUnusable(version, MAX_JOB_PREFIX_LENGTH - jobPrefix.length - 1);
   if (reason !== undefined) {
     throw new JigsError(
       `${DEPLOYMENT_VERSION_VARIABLE} ${JSON.stringify(version)} is not a usable deployment version: ${reason}`,
@@ -47,6 +37,15 @@ export function validateDeploymentVersion(
     );
   }
   return version;
+}
+
+function whyVersionIsUnusable(version: string, maxLength: number): string | undefined {
+  if (version === "") return "it is empty";
+  if (!VERSION_SHAPE.test(version)) return "it may only use letters, digits, '.', '-', '_' and '@'";
+  if (version === UNPINNED_DEPLOYMENT_ID)
+    return `"${UNPINNED_DEPLOYMENT_ID}" is reserved by the World`;
+  if (version.length > maxLength) return `it is longer than ${maxLength} characters`;
+  return undefined;
 }
 
 /**

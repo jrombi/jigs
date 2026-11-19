@@ -18,7 +18,12 @@ import {
 } from "../workflow/linear/agent-session.ts";
 import { recordedOccurrences, withdrawOccurrence } from "./event-triggers/runner.ts";
 import type { Occurrence } from "./event-triggers/store.ts";
-import { awaitTaken, leaveLiveTurnMessage, type RelayedMessage } from "./live-turn-relay.ts";
+import {
+  awaitTaken,
+  deliverToLiveTurn,
+  leaveLiveTurnMessage,
+  type RelayedMessage,
+} from "./live-turn-relay.ts";
 import { deploymentVersion } from "./role-state.ts";
 import { cancelRun, runStatuses } from "./runs.ts";
 import { wake } from "./wake.ts";
@@ -172,10 +177,7 @@ export async function routeSessionPrompt(
           text: prompt.content.body ?? "",
         },
       };
-  if (live !== undefined) {
-    if (relayed.kind === "stop") live.stop();
-    else live.inject(relayed.message);
-  }
+  if (live !== undefined) deliverToLiveTurn(live, relayed);
   // Woken even when the live turn took the message: one that fails drops the
   // messages after it, and the wake makes the listening run read them again.
   const woke = await deps.wake(

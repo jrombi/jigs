@@ -11,6 +11,8 @@ import type { RunRequest } from "../shared/types.ts";
 import { claudeDriver } from "./driver.ts";
 import { claudeProcessSpawner, claudeStepSettings } from "./process.ts";
 
+// inTestFactory mocks process.cwd(); an ask's child still starts in the real one.
+const realCwd = process.cwd();
 inTestFactory();
 
 let tmp: string;
@@ -84,7 +86,7 @@ test("the real SDK launch isolates ask and run and fails with Claude Code's stde
         harness: { kind: "claude", model: "sonnet" },
         prompt: "answer",
       }),
-      cwd: process.cwd(),
+      cwd: realCwd,
     },
     {
       name: "run",

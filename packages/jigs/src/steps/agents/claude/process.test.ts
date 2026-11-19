@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
+import { inTestFactory } from "../../../test-fixtures.ts";
 import { type ClaudeHarness, harnesses } from "../../../workflow/agents/harness-config.ts";
 import { buildAgentRequest, buildAskAgentRequest } from "../../../workflow/agents/plan.ts";
 import { harnessEnv } from "../shared/env.ts";
@@ -9,6 +10,8 @@ import { makeTmpDir, removeTmpDir } from "../shared/test-fixtures.ts";
 import type { RunRequest } from "../shared/types.ts";
 import { claudeDriver } from "./driver.ts";
 import { claudeProcessSpawner, claudeStepSettings } from "./process.ts";
+
+inTestFactory();
 
 let tmp: string;
 let worktree: string;

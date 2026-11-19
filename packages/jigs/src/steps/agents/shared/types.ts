@@ -6,6 +6,7 @@ import type {
   OutputInterface,
 } from "ai";
 import type { Check } from "../../../checks/check.ts";
+import type { FactoryContext } from "../../../config/factory-context.ts";
 import type { TurnRequest, TurnResult } from "../../../workflow/agents/conversation.ts";
 import type {
   Harness,
@@ -165,9 +166,9 @@ export interface Driver<K extends HarnessKind | ModelKind> {
   /**
    * Checks on how the descriptor pays for its calls, such as the login or key its harness runs
    * on. Preflight and doctor run them ahead of a run; the step does not, since a wrong credential
-   * fails its first call anyway.
+   * fails its first call anyway. `ctx` holds the factory's defaults for a descriptor that sets none.
    */
-  credentialChecks?(descriptor: DriverDescriptor<K>): Check[];
+  credentialChecks?(descriptor: DriverDescriptor<K>, ctx: FactoryContext): Check[];
   /**
    * Every check the descriptor alone decides, such as the credential its model source reads.
    * Preflight and doctor run them ahead of a run, and the step runs them again before it starts.

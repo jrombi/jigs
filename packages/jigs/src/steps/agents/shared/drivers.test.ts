@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
+import { inTestFactory } from "../../../test-fixtures.ts";
 import { harnesses, harnessKinds, models } from "../../../workflow/agents/harness-config.ts";
 import {
   buildAgentRequest,
@@ -9,6 +10,8 @@ import {
 import { RESERVED_AGENT_ENV } from "../../../workflow/factory-schema.ts";
 import { driverFor, drivers } from "./drivers.ts";
 import type { DriverRequest } from "./types.ts";
+
+inTestFactory();
 
 const localSource = models.openaiCompatible({
   name: "local",

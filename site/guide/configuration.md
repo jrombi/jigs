@@ -547,6 +547,30 @@ GitHub token from jigs, not from this list.
 This limits what agents see in their environment only. They still run as your
 user and can read any file you can.
 
+## `harnesses` {#harnesses}
+
+Defaults for the harnesses your workflows build. `harnesses.claude.credential`
+is how a Claude harness that sets no
+[`credential`](/guide/models-and-harnesses#claude-code) of its own pays for its
+calls: `{ kind: "api-key", apiKeyEnv? }` or `{ kind: "bedrock" }`. Left out, it
+is the claude.ai subscription login.
+
+Workflow code cannot read the environment, but `jigs.config.ts` can, so each
+copy picks its own from the same workflows. This one uses an API key where
+`ANTHROPIC_API_KEY` is set, such as a server, and the subscription login
+elsewhere:
+
+```ts factory-options
+// Inside defineFactory({ ... }) in jigs.config.ts
+harnesses: {
+  claude: { credential: process.env.ANTHROPIC_API_KEY ? { kind: "api-key" } : undefined },
+},
+```
+
+A harness's own `credential` wins over the default. The service reads the
+default when it starts, and preflight and `jigs doctor` check the credential
+each harness runs on. An invalid default fails when `jigs.config.ts` loads.
+
 ## GitHub
 
 ### The factory's App {#github-app}
@@ -799,7 +823,7 @@ These are the values every copy shares, in `.env`:
 | --- | --- |
 | `WORKFLOW_TARGET_WORLD` | Always. Filled in by `jigs init`; leave it. |
 | `OPENROUTER_API_KEY` | Workflows that use `models.openrouter()`. |
-| `ANTHROPIC_API_KEY` | Workflows whose Claude harness declares [`credential: { kind: "api-key" }`](/guide/models-and-harnesses#claude-code). A Bedrock credential takes the AWS variables instead. |
+| `ANTHROPIC_API_KEY` | Workflows whose Claude harness runs on [`credential: { kind: "api-key" }`](/guide/models-and-harnesses#claude-code), its own or the factory's [default](#harnesses). A Bedrock credential takes the AWS variables instead. |
 | `JIGS_CLAUDE_EXECUTABLE` | Optional. Path to `claude` when it is not on the service's `PATH`. |
 | `AWS_PROFILE` | Workflows that declare `requires: { aws: true }`. Preflight checks the profile with `aws sts get-caller-identity`. For an SSO profile it skips cached role credentials, so an expired `aws sso login` fails the check. |
 | `WORKFLOW_POSTGRES_MAX_POOL_SIZE` | Optional. How many database connections the World opens, 10 by default. The queue runs up to 50 jobs at once, so under heavy load raise it to 50. Every copy sharing a Postgres server counts toward its connection limit, 100 by default. |

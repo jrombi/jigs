@@ -156,7 +156,7 @@ export function preflightChecks(
     ...(needsHub({ ...requires, bindings }) ? hubChecks(ctx) : []),
     ...PROVIDERS.filter((provider) => integrations.includes(provider)).flatMap(installations),
     ...bindingChecks({ context: ctx, names: bindings }),
-    ...descriptorChecks(requiredDescriptors(requires)),
+    ...descriptorChecks(requiredDescriptors(requires), ctx),
     ...agentGithubChecks(Object.values(requires.agents ?? {})),
     ...declaredSkillChecks({ workflow: { requires } }).flatMap(({ checks }) => checks),
     ...(requires.aws ? [awsCredentialsCheck()] : []),
@@ -345,7 +345,7 @@ export function doctorChecks(
     ...(providers.length > 0 ? hubChecks(ctx, status) : []),
     ...providers,
     ...bindingChecks({ context: ctx }),
-    ...usedDescriptorChecks(workflows),
+    ...usedDescriptorChecks(workflows, ctx),
     ...usedAgentGithubChecks(workflows),
     ...requiredMcpServerChecks(workflows, ctx),
     ...declaredSkillChecks(workflows).flatMap(({ checks, workflows }) =>

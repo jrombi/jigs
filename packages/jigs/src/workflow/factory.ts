@@ -7,6 +7,7 @@ import {
   type bindingSchema,
   type factoryConfigSchema,
   type githubSchema,
+  type harnessesSchema,
   type linearSchema,
   parseFactoryConfig,
   type WorkflowImport,
@@ -251,6 +252,30 @@ export type BindingDefinition = z.input<typeof bindingSchema>;
  * @group Factory and workflows
  */
 export type AgentsDefinition = z.input<typeof agentsSchema>;
+
+/**
+ * Factory-wide defaults for the harnesses this factory's workflows build.
+ *
+ * @remarks
+ * `claude.credential` is how every Claude harness that sets no `credential` of its own pays for
+ * its calls. Leave it out for the claude.ai subscription login. Workflow code cannot read the
+ * environment, but `jigs.config.ts` can, so each copy can choose its own: the subscription login
+ * on a laptop and an API key on a server, from the same workflows. The service reads it when it
+ * starts.
+ *
+ * @example
+ * Use this value for `harnesses` in `jigs.config.ts`.
+ * ```ts
+ * import type { HarnessesDefinition } from "@jigs-ai/jigs";
+ *
+ * const harnesses = {
+ *   claude: { credential: process.env.ANTHROPIC_API_KEY ? { kind: "api-key" } : undefined },
+ * } satisfies HarnessesDefinition;
+ * ```
+ *
+ * @group Factory and workflows
+ */
+export type HarnessesDefinition = z.input<typeof harnessesSchema>;
 
 /**
  * Operating settings and deferred workflow modules declared by a factory.

@@ -8,6 +8,7 @@ const JIGS_KEYS = [
   "linear",
   "pagerduty",
   "skills",
+  "credential",
 ] as const;
 
 // The provider settings a descriptor carries. The drivers spread these first

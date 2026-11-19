@@ -7,7 +7,7 @@ import { sql } from "drizzle-orm";
 import { deploymentJobPrefix, deploymentTasks } from "../../config/deployment-version.ts";
 import type { RegistrySql } from "../../steps/runtime/registry.ts";
 import type { DrainReport } from "../role.ts";
-import { drainingSince } from "./store.ts";
+import { drainingSince, LIVE_RUN } from "./store.ts";
 
 /** A deployment version within the factory's World. */
 export interface DeploymentOwner {
@@ -15,8 +15,6 @@ export interface DeploymentOwner {
   /** The base job prefix every version of the factory shares. */
   jobPrefix: string;
 }
-
-const LIVE = sql`r.status in ('pending', 'running')`;
 
 // The World stamps each run with its deployment's job prefix, which, unlike the
 // deployment id alone, is also distinct between factories sharing a database.
@@ -27,7 +25,7 @@ const ownedBy = (owner: DeploymentOwner) =>
 export async function liveRunIds(db: RegistrySql, owner: DeploymentOwner): Promise<string[]> {
   const { rows } = await db.execute<{ runId: string }>(sql`
     select r.id as "runId" from "workflow"."workflow_runs" r
-    where ${ownedBy(owner)} and ${LIVE}
+    where ${ownedBy(owner)} and ${LIVE_RUN}
     order by r.created_at
   `);
   return rows.map((row) => row.runId);
@@ -36,16 +34,23 @@ export async function liveRunIds(db: RegistrySql, owner: DeploymentOwner): Promi
 /** How many live runs `owner` started. */
 export async function ownedRunCount(db: RegistrySql, owner: DeploymentOwner): Promise<number> {
   const { rows } = await db.execute<{ count: number }>(
-    sql`select count(*)::int as count from "workflow"."workflow_runs" r where ${ownedBy(owner)} and ${LIVE}`,
+    sql`select count(*)::int as count from "workflow"."workflow_runs" r where ${ownedBy(owner)} and ${LIVE_RUN}`,
   );
   return rows[0]?.count ?? 0;
 }
 
-/** Jobs waiting or locked on `owner`'s tasks, whichever run they are for. */
+/**
+ * Jobs on `owner`'s tasks that can still do work: due now or being worked on, with attempts left.
+ */
 export async function queuedJobCount(db: RegistrySql, owner: DeploymentOwner): Promise<number> {
+  const tasks = deploymentTasks(owner.jobPrefix, owner.version);
+  // An ended run leaves its timers (a sleep's wake-up, up to a day out) and Graphile keeps a job
+  // with no attempts left; a job due later matters only while its run is live, as ownedRunCount counts.
   const { rows } = await db.execute<{ count: number }>(sql`
     select count(*)::int as count from graphile_worker.jobs j
-    where j.task_identifier = any(${sql.param(deploymentTasks(owner.jobPrefix, owner.version))}::text[])
+    where j.task_identifier = any(${sql.param(tasks)}::text[])
+      and j.attempts < j.max_attempts
+      and (j.locked_at is not null or j.run_at <= now())
   `);
   return rows[0]?.count ?? 0;
 }

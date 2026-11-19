@@ -133,6 +133,20 @@ export async function wasEverCurrent(
   return rows[0]?.madeCurrentAt != null;
 }
 
+/** Whether a process of `version` has reported recently enough to count as running. */
+export async function deploymentRunning(
+  db: RegistrySql,
+  factory: string,
+  version: string,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const rows = await db
+    .select({ lastSeenAt: deployments.lastSeenAt })
+    .from(deployments)
+    .where(and(eq(deployments.factory, factory), eq(deployments.version, version)));
+  return seenRecently(rows[0]?.lastSeenAt ?? null, now);
+}
+
 /** When `version` stopped being current, or null while it is current or never was. */
 export async function drainingSince(
   db: RegistrySql,
@@ -158,6 +172,8 @@ export interface DeploymentView {
   supersededAt: string | null;
   pid: number | null;
   host: string | null;
+  /** Whether a process of this version has reported within the last five minutes. */
+  running: boolean;
   /** The live runs this version started; they finish on it. */
   runs: number;
 }
@@ -197,17 +213,21 @@ export async function listDeployments(
     supersededAt: row.supersededAt?.toISOString() ?? null,
     pid: row.pid,
     host: row.host,
+    running: seenRecently(row.lastSeenAt, now),
     runs: owned.get(deploymentJobPrefix(jobPrefix, row.version)) ?? 0,
   }));
 }
 
+/** Whether a row of the World's `workflow_runs`, aliased `r`, is a run that has not ended. */
+export const LIVE_RUN = sql`r.status in ('pending', 'running')`;
+
 // The World's own table: a run's `job_prefix` names the deployment that started it.
 async function ownedRunCounts(db: RegistrySql): Promise<Map<string, number>> {
   const { rows } = await db.execute<{ jobPrefix: string; runs: number }>(sql`
-    select job_prefix as "jobPrefix", count(*)::int as runs
-    from "workflow"."workflow_runs"
-    where status in ('pending', 'running') and job_prefix is not null
-    group by job_prefix
+    select r.job_prefix as "jobPrefix", count(*)::int as runs
+    from "workflow"."workflow_runs" r
+    where ${LIVE_RUN} and r.job_prefix is not null
+    group by r.job_prefix
   `);
   return new Map(rows.map((row) => [row.jobPrefix, row.runs]));
 }

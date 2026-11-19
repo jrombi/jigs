@@ -13,6 +13,7 @@ import { connectRegistry, ensureRegistry, type RegistrySql } from "../../steps/r
 import {
   currentDeployment,
   DEPLOYMENTS_CHANNEL,
+  deploymentRunning,
   drainingSince,
   LIVE_WINDOW_MS,
   listDeployments,
@@ -68,11 +69,18 @@ dbTest(
       role: "draining",
       pid: 4242,
       host: "box",
+      running: true,
       runs: 0,
     });
 
     const later = new Date(Date.now() + LIVE_WINDOW_MS + 60_000);
-    expect((await listDeployments(db, FACTORY, undefined, later))[0]?.role).toBe("gone");
+    expect((await listDeployments(db, FACTORY, undefined, later))[0]).toMatchObject({
+      role: "gone",
+      running: false,
+    });
+    expect(await deploymentRunning(db, FACTORY, "v1")).toBe(true);
+    expect(await deploymentRunning(db, FACTORY, "v1", later)).toBe(false);
+    expect(await deploymentRunning(db, FACTORY, "never-booted")).toBe(false);
     await touchDeployment(db, FACTORY, "v1");
     expect((await listDeployments(db, FACTORY))[0]?.role).toBe("draining");
   },
@@ -117,7 +125,8 @@ dbTest("the listing counts the live runs each version started", async () => {
     (await listDeployments(db, FACTORY)).map((view) => [view.version, view]),
   );
   expect(byVersion.get("v1")?.runs).toBe(2);
-  expect(byVersion.get("v2")).toMatchObject({ role: "current", runs: 1 });
+  // v2 was made current before any copy of it booted.
+  expect(byVersion.get("v2")).toMatchObject({ role: "current", running: false, runs: 1 });
   expect(byVersion.get("v3")?.runs).toBe(0);
 });
 

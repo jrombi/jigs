@@ -220,11 +220,16 @@ keeps only its queue worker, finishes the runs it started, and exits with code
 | Command | What it does |
 | --- | --- |
 | `jigs deployments` | List every version that has run: its role (`current`, `draining`, or `gone` when no process has reported for five minutes), when it started, when it was last seen, the live runs it started, and its process. `--json` prints the same. |
-| `jigs deployments current <version>` | Make a version the factory. The one that was current drains. A hosted pipeline runs it once the new copy is healthy; a rollback is running it with the previous version. |
+| `jigs deployments current <version>` | Make a version the factory. The one that was current drains. A hosted pipeline runs it once the new copy is healthy. The version must have a running process, or the command refuses: the one current now would drain and exit, leaving no factory. `--force` makes it current anyway. |
 | `jigs deployments prune` | Forget versions that are not current and have no running process. A version that still has live runs is kept, and the command says so. `--cancel-runs` cancels those runs first, through the current service, then forgets the version. |
 
 The commands read the factory's database directly, so they work while the
 service is draining or stopped.
+
+A rollback starts the previous version first. A version that drained has
+exited, so deploy its build again, wait until it is healthy, then run
+`jigs deployments current <previous-version>`. `jigs deployments` shows a
+version with no running process as `none` under PROCESS.
 
 A copy that boots and finds another version current drains from the start: it
 does not take over. A copy whose version has never been current stays up until

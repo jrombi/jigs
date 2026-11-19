@@ -8,10 +8,11 @@ import { listDeployments, makeCurrent, pruneDeployments } from "./deployments.ts
 const store = vi.hoisted(() => ({
   listDeployments: vi.fn(),
   makeDeploymentCurrent: vi.fn(),
+  deploymentRunning: vi.fn(),
   pruneDeployments: vi.fn(),
 }));
 vi.mock("../../service/deployments/store.ts", () => store);
-const drain = vi.hoisted(() => ({ liveRunIds: vi.fn() }));
+const drain = vi.hoisted(() => ({ liveRunIds: vi.fn(), ownedRunCount: vi.fn() }));
 vi.mock("../../service/deployments/drain.ts", () => drain);
 
 const NOW = new Date("2026-11-18T12:00:00.000Z");
@@ -26,8 +27,10 @@ beforeEach(() => {
   ended = 0;
   store.listDeployments.mockReset();
   store.makeDeploymentCurrent.mockReset();
+  store.deploymentRunning.mockReset().mockResolvedValue(true);
   store.pruneDeployments.mockReset();
   drain.liveRunIds.mockReset();
+  drain.ownedRunCount.mockReset().mockResolvedValue(0);
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -54,6 +57,7 @@ const view = (fields: Partial<DeploymentView>): DeploymentView => ({
   supersededAt: null,
   pid: 4242,
   host: "box",
+  running: true,
   runs: 0,
   ...fields,
 });
@@ -62,7 +66,7 @@ test("lists every version with its role, age, runs and process, and points at pr
   store.listDeployments.mockResolvedValue([
     view({ version: "v2", runs: 3 }),
     view({ version: "v1", role: "draining", pid: 4100, runs: 1, madeCurrentAt: null }),
-    view({ version: "v0", role: "gone", lastSeenAt: null, pid: null, host: null }),
+    view({ version: "v0", role: "gone", lastSeenAt: null, pid: 4000, running: false }),
   ]);
 
   await listDeployments(deps());
@@ -77,6 +81,21 @@ test("lists every version with its role, age, runs and process, and points at pr
     "  pnpm exec jigs deployments prune",
   ]);
   expect(ended).toBe(1);
+});
+
+test("a current version with no running process says so", async () => {
+  store.listDeployments.mockResolvedValue([
+    view({ version: "v2", running: false, lastSeenAt: "2026-11-18T11:00:00.000Z" }),
+  ]);
+
+  await listDeployments(deps());
+
+  expect(lines).toEqual([
+    "VERSION  ROLE     STARTED  SEEN    RUNS  PROCESS",
+    "v2       current  1h ago   1h ago  0     none",
+    "",
+    "version v2 is current but has no running process: no copy is the factory until it runs again",
+  ]);
 });
 
 test("--json prints the views as they are", async () => {
@@ -108,7 +127,27 @@ test("current validates the version, writes it and names the one it replaced", a
   await expect(makeCurrent("not/ok", deps())).rejects.toThrow("not a usable deployment version");
 });
 
-const pruneDeps = (cancel = vi.fn(async () => {})) => ({
+test("current refuses a version with no running process unless forced", async () => {
+  store.deploymentRunning.mockResolvedValue(false);
+  store.makeDeploymentCurrent.mockResolvedValue("v2");
+
+  await expect(makeCurrent("v1", deps())).rejects.toThrow("version v1 has no running process");
+  expect(store.makeDeploymentCurrent).not.toHaveBeenCalled();
+
+  await makeCurrent("v1", deps(), { force: true });
+  expect(store.makeDeploymentCurrent).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.any(String),
+    "v1",
+  );
+});
+
+test("current validates the version against the factory's configured job prefix", async () => {
+  vi.stubEnv("WORKFLOW_POSTGRES_JOB_PREFIX", "x".repeat(70));
+  await expect(makeCurrent("v1-much-too-long", deps())).rejects.toThrow("is longer than");
+});
+
+const pruneDeps = (cancel = vi.fn(async (_runId: string) => {})) => ({
   ...deps(),
   serviceUrl: "http://localhost:1",
   cancel,
@@ -140,23 +179,51 @@ test("prune keeps a version with no process that still owns runs, and says how t
   ]);
 });
 
-test("prune --cancel-runs cancels a gone version's runs, then forgets it", async () => {
-  store.listDeployments.mockResolvedValue([
-    view({ version: "v1", role: "draining", runs: 1 }),
-    view({ version: "v0", role: "gone", runs: 2 }),
-  ]);
+const noSleep = async () => {};
+
+test("prune --cancel-runs cancels a gone version's runs, waits for them to end, then forgets it", async () => {
+  const abandoned = view({ version: "v0", role: "gone", runs: 2, running: false });
+  store.listDeployments
+    .mockResolvedValueOnce([view({ version: "v1", role: "draining", runs: 1 }), abandoned])
+    .mockResolvedValue([]);
   drain.liveRunIds.mockResolvedValue(["wrun_a", "wrun_b"]);
+  drain.ownedRunCount.mockResolvedValueOnce(2).mockResolvedValue(0);
   store.pruneDeployments.mockResolvedValue(["v0"]);
   const cancel = vi.fn(async () => {});
 
-  await pruneDeployments(pruneDeps(cancel), { cancelRuns: true });
+  await pruneDeployments({ ...pruneDeps(cancel), sleep: noSleep }, { cancelRuns: true });
 
   expect(drain.liveRunIds).toHaveBeenCalledWith(expect.anything(), {
     version: "v0",
     jobPrefix: "workflow_",
   });
   expect(cancel.mock.calls).toEqual([["wrun_a"], ["wrun_b"]]);
+  expect(drain.ownedRunCount).toHaveBeenCalledTimes(2);
   expect(lines).toEqual(["removed version v0"]);
+});
+
+test("prune --cancel-runs reports a run it could not cancel and a version whose runs have not ended", async () => {
+  const abandoned = view({ version: "v0", role: "gone", runs: 2, running: false });
+  store.listDeployments.mockResolvedValue([abandoned]);
+  drain.liveRunIds.mockResolvedValue(["wrun_a", "wrun_b"]);
+  drain.ownedRunCount.mockResolvedValue(1);
+  store.pruneDeployments.mockResolvedValue([]);
+  const cancel = vi.fn(async (runId: string) => {
+    if (runId === "wrun_b") throw new Error("cancel failed: HTTP 500");
+  });
+
+  await pruneDeployments(
+    { ...pruneDeps(cancel), sleep: noSleep, cancelWaitMs: 1_000 },
+    { cancelRuns: true },
+  );
+
+  expect(drain.ownedRunCount).toHaveBeenCalledTimes(2);
+  expect(lines).toEqual([
+    "could not cancel run wrun_b: cancel failed: HTTP 500",
+    "kept version v0: it has no process and owns 2 live run(s)",
+    "its runs have not ended yet; prune again once they have:",
+    "  pnpm exec jigs deployments prune --cancel-runs",
+  ]);
 });
 
 test("without WORKFLOW_POSTGRES_URL the command says which variable to set", async () => {

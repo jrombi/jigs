@@ -406,8 +406,9 @@ deploymentsCommand
   .command("current")
   .description("make a version the factory's current one; every other running version drains")
   .argument("<version>", "the deployment version, as JIGS_DEPLOYMENT_VERSION names it")
-  .action(async (version: string) => {
-    await makeCurrent(version, { out });
+  .option("--force", "make it current even though no process of it is running")
+  .action(async (version: string, options: { force?: boolean }) => {
+    await makeCurrent(version, { out }, options);
   });
 
 deploymentsCommand

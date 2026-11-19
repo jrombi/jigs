@@ -131,3 +131,26 @@ dbTest("past the cap, v1 cancels its run, logs it and owns nothing", async () =>
   expect((await runRow(runId))?.status).toBe("cancelled");
   expect(await ownedRunCount(db, v1)).toBe(0);
 });
+
+// v2 has no worker here, so its jobs stay exactly as added.
+const addV2Job = (key: string, runAt: Date) =>
+  db.$client.query(
+    `select graphile_worker.add_job('workflow_v2_flows', '{}'::json, run_at => $1::timestamptz, job_key => $2)`,
+    [runAt.toISOString(), key],
+  );
+
+const useUpAttempts = (key: string) =>
+  db.$client.query(
+    "update graphile_worker._private_jobs set attempts = max_attempts where key = $1",
+    [key],
+  );
+
+dbTest("a timer due later and a job with no attempts left do not hold a drain", async () => {
+  await addV2Job("v2-sleep-wake-up", new Date(Date.now() + 86_400_000));
+  await addV2Job("v2-dead", new Date());
+  await useUpAttempts("v2-dead");
+  expect(await queuedJobCount(db, v2)).toBe(0);
+
+  await addV2Job("v2-due", new Date());
+  expect(await queuedJobCount(db, v2)).toBe(1);
+});

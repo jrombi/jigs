@@ -706,10 +706,12 @@ export default defineWorkflow({ inputs: runtimeE2eInputs, workflow: runtimeE2eWo
 }
 
 // The factory's own CLI, as the deploy that makes a version current would run it.
-function makeCurrent(env, version) {
+// `beforeItRuns` forces a version current before any copy of it has booted.
+function makeCurrent(env, version, { beforeItRuns = false } = {}) {
+  const force = beforeItRuns ? ["--force"] : [];
   execFileSync(
     path.join(factory, "node_modules", ".bin", "jigs"),
-    ["deployments", "current", version],
+    ["deployments", "current", version, ...force],
     { cwd: factory, env, stdio: "inherit" },
   );
 }
@@ -795,7 +797,7 @@ async function runtimeScenario(postgresUrl) {
   installRuntimeFixture();
   build();
   run(path.join(factory, "node_modules", ".bin", "bootstrap"), []);
-  makeCurrent(runtimeEnv(postgresUrl), RUNTIME_VERSION);
+  makeCurrent(runtimeEnv(postgresUrl), RUNTIME_VERSION, { beforeItRuns: true });
 
   const marker = path.join(scratch, "runtime-step-markers.txt");
   const token = `runtime-e2e-${crypto.randomUUID()}`;
@@ -1015,7 +1017,7 @@ async function drainScenario(postgresUrl) {
     version: "drain-v2",
     ports: { service: DRAIN_PORT, dashboard: DRAIN_DASHBOARD_PORT },
   };
-  makeCurrent(runtimeEnv(postgresUrl), v1.version);
+  makeCurrent(runtimeEnv(postgresUrl), v1.version, { beforeItRuns: true });
   const first = await startRuntimeService(postgresUrl, v1);
   let second;
   try {
@@ -1147,12 +1149,12 @@ async function runStatus(postgresUrl, runId) {
 async function drainCapScenario(postgresUrl) {
   buildWithShortDrainCap();
   const v1 = { version: "cap-v1", ports: RUNTIME_PORTS };
-  makeCurrent(runtimeEnv(postgresUrl), v1.version);
+  makeCurrent(runtimeEnv(postgresUrl), v1.version, { beforeItRuns: true });
   const first = await startRuntimeService(postgresUrl, v1);
   try {
     const { runId } = await startParkedRun(v1.ports.service, "cap");
     const firstExit = exitOf(first);
-    makeCurrent(runtimeEnv(postgresUrl), "cap-v2");
+    makeCurrent(runtimeEnv(postgresUrl), "cap-v2", { beforeItRuns: true });
     await expectDrainedExit(first, firstExit, [
       `run ${runId} cancelled: version ${v1.version} has drained for`,
       `version ${v1.version} drained, exiting`,

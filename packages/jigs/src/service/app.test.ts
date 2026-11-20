@@ -14,7 +14,10 @@ import { type Factory, ticketInputSchema } from "../workflow/factory.ts";
 import { linearListeningToken, linearSessionToken } from "../workflow/linear/agent-session.ts";
 import { ticketToken } from "../workflow/linear/ticket-token.ts";
 import { pullRequestToken } from "../workflow/pull-requests/pull-request.ts";
+import * as deploymentStore from "./deployments/store.ts";
 import * as queue from "./queue.ts";
+import { READY_PHASE, setBootPhase } from "./readiness.ts";
+import { resetRoleState, setDeploymentVersion, setServiceRole } from "./role-state.ts";
 import { appClient } from "./test-fixtures.ts";
 import { clearWakes, lastWake } from "./wake.ts";
 
@@ -107,6 +110,7 @@ beforeEach(() => {
   resumeHookMock.mockReset().mockRejectedValue(new HookNotFoundError("unclaimed-test-token"));
 });
 afterEach(() => {
+  resetRoleState();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   // Clears the cached world too, so the next getWorld() opens the local one
@@ -255,6 +259,89 @@ test("health outside a factory reports a null root rather than failing liveness"
   } finally {
     cwd.mockRestore();
   }
+});
+
+test("GET /api/deployments lists the versions the registry holds, with this copy's own", async () => {
+  setDeploymentVersion("v2", "workflow_");
+  setServiceRole("current", "v2");
+  const views = [
+    {
+      version: "v2",
+      role: "current",
+      startedAt: "2026-11-18T11:00:00.000Z",
+      lastSeenAt: null,
+      madeCurrentAt: null,
+      pid: null,
+      host: null,
+      runs: 0,
+    },
+  ];
+  vi.spyOn(deploymentStore, "listDeployments").mockResolvedValue(views as never);
+
+  const res = await app.request("/api/deployments");
+
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ version: "v2", deployments: views });
+});
+
+test("a draining copy answers 503 on every route but its liveness, which names both versions", async () => {
+  setDeploymentVersion("v1", "workflow_");
+  setServiceRole("draining", "v2");
+
+  const health = await app.request("/health");
+  expect(health.status).toBe(200);
+  expect(await health.json()).toMatchObject({
+    ok: true,
+    version: "v1",
+    role: "draining",
+    currentVersion: "v2",
+  });
+
+  const runs = await app.request("/api/runs");
+  expect(runs.status).toBe(503);
+  expect(await runs.json()).toEqual({
+    error: "this copy runs version v1, which is draining; version v2 is current",
+    version: "v1",
+    currentVersion: "v2",
+  });
+  expect((await app.request("/api/workflows/plain/runs", { method: "POST" })).status).toBe(503);
+});
+
+test("a versioned copy that has not read its role yet refuses the API but answers its liveness", async () => {
+  setDeploymentVersion("v1", "workflow_");
+
+  expect((await app.request("/health")).status).toBe(200);
+  const start = await app.request("/api/workflows/plain/runs", { method: "POST" });
+  expect(start.status).toBe(503);
+  expect(await start.json()).toEqual({
+    error:
+      "this copy runs version v1, whose role is not known yet: it has not read the factory's current version",
+    version: "v1",
+    currentVersion: null,
+  });
+});
+
+test("a booted versioned copy reports ready only once it has read its role", async () => {
+  setBootPhase(READY_PHASE);
+  try {
+    setDeploymentVersion("v2", "workflow_");
+    expect(await (await app.request("/health")).json()).toMatchObject({ ready: false, role: null });
+
+    setServiceRole("draining", "v1");
+    expect(await (await app.request("/health")).json()).toMatchObject({
+      ready: true,
+      role: "draining",
+    });
+  } finally {
+    setBootPhase("starting");
+  }
+});
+
+test("a versioned copy serves the API once it is current", async () => {
+  setDeploymentVersion("v1", "workflow_");
+  setServiceRole("current", "v1");
+
+  expect((await app.request("/api/runs")).status).toBe(200);
 });
 
 test("GET /api/runs answers with empty runs when nothing has launched", async () => {

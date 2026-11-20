@@ -206,6 +206,26 @@ Check `jigs status` before upgrading: once the new jigs is installed, commands
 that talk to the old service fail with a version error until `jigs up` restarts
 it.
 
+## Versions
+
+A hosted factory can run several copies while it deploys, each a deployment
+version set by `JIGS_DEPLOYMENT_VERSION`; one is current: the factory. A laptop
+copy from `jigs up` has no version and none of this applies. `jigs deployments`
+lists the versions with their role (`current`, `draining`, `gone`) and the live
+runs each started. The deploy runs `jigs deployments current <version>` once the
+new copy's `/health` says `ready`; a rollback starts the previous version first, then runs
+it with that version, since the command refuses a version with no running
+process. A run stays on the version that started it: a draining version finishes its own runs
+and exits on its own, and after `deployments.maxDrainDays` (14 by default)
+without being current it cancels the runs left and exits. A `gone` version with
+runs crashed; its runs wait for it, so ask the human to start that version
+again. Never make a version current on your own: that is the deploy's
+decision, or the human's. A command answered with 503 and a message naming a
+draining version was sent to the wrong copy; the current one is the service to
+talk to. A 503 saying the role is not known yet comes from a copy still booting. `jigs deployments prune` only forgets versions with no process and no
+runs, and is safe to run; `--cancel-runs` cancels runs, so only on the human's
+word.
+
 ## Parked runs and worktrees
 
 A suspended run holds its worktree because it will return to it. Automatic

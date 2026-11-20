@@ -37,3 +37,8 @@ export function registerLiveTurn(conversation: string, turn: LiveTurn): () => vo
 export function liveTurn(conversation: string): LiveTurn | undefined {
   return turns().get(conversation);
 }
+
+/** The conversations with a live turn in this process. */
+export function liveTurnTokens(): string[] {
+  return [...turns().keys()];
+}

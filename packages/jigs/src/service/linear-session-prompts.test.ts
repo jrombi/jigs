@@ -32,6 +32,7 @@ let timers: Array<{ fire: () => void; ms: number }>;
 let postFailures: number;
 let deps: SessionPromptDeps & {
   wake: ReturnType<typeof vi.fn>;
+  relay: ReturnType<typeof vi.fn>;
   cancelRun: ReturnType<typeof vi.fn>;
   withdraw: ReturnType<typeof vi.fn>;
   recorded: ReturnType<typeof vi.fn>;
@@ -52,6 +53,7 @@ beforeEach(() => {
   posted.clear();
   deps = {
     liveTurn: (token) => (token === SESSION ? (turn as LiveTurn | undefined) : undefined),
+    relay: vi.fn(async () => false),
     wake: vi.fn(async () => wakeOutcome),
     linear: () => ({
       postActivityOnce: async (sessionId, content, id) => {
@@ -162,7 +164,52 @@ test("a reply with no live turn wakes the parked run", async () => {
   wakeOutcome = { outcome: "woken" };
   expect(await route(prompted())).toBe("woken");
   expect(deps.wake).toHaveBeenCalledWith(LISTENING, expect.any(String));
+  expect(deps.relay).not.toHaveBeenCalled();
   expect(posted.size).toBe(0);
+});
+
+test("a reply a live turn in another copy takes through the relay is accepted and not answered", async () => {
+  holder = RUN;
+  statuses = new Map([[RUN, "running"]]);
+  deps.relay.mockResolvedValue(true);
+  const event = prompted();
+
+  expect(await route(event)).toBe("woken");
+
+  expect(deps.relay).toHaveBeenCalledExactlyOnceWith(SESSION, {
+    kind: "inject",
+    message: { uuid: event.agentActivity.id, author: "Ada", text: "and the tests?" },
+  });
+  expect(posted.size).toBe(0);
+});
+
+test("a stop taken by another copy's live turn still arms the fallback that ends the session", async () => {
+  holder = RUN;
+  deps.relay.mockResolvedValue(true);
+
+  expect(await route(stopEvent())).toBe("woken");
+
+  expect(deps.relay).toHaveBeenCalledExactlyOnceWith(SESSION, { kind: "stop" });
+  expect(timers.map((timer) => timer.ms)).toEqual([STOP_GRACE_MS]);
+});
+
+test("a reply no copy takes within the relay's grace is answered as not listening", async () => {
+  holder = RUN;
+  last = { type: "thought", createdAt: "2026-10-06T00:00:00.000Z" };
+  statuses = new Map([[RUN, "running"]]);
+
+  expect(await route(prompted())).toBe("woken");
+
+  expect(deps.relay).toHaveBeenCalledOnce();
+  expect(bodies()).toEqual([
+    "I'm working and can't take instructions mid-run; I'll ask here if I need you. Use Stop to end the run.",
+  ]);
+});
+
+test("the relay is not asked when a live turn runs here", async () => {
+  liveTurn();
+  expect(await route(prompted())).toBe("woken");
+  expect(deps.relay).not.toHaveBeenCalled();
 });
 
 test("a reply the run already took as it stopped listening gets no answer", async () => {

@@ -267,6 +267,7 @@ const BARREL_EXPORTS: Record<string, string[]> = {
     "automaticReleaseAction",
     "createApp",
     "listenOnServicePort",
+    "pinDeploymentVersion",
     "reconcileAutomaticRelease",
     "startService",
   ],

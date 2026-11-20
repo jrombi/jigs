@@ -4,17 +4,20 @@
  * @packageDocumentation
  */
 
+import {
+  configuredDeploymentVersion,
+  configuredJobPrefix,
+  WORLD_DEPLOYMENT_VARIABLE,
+} from "../config/deployment-version.ts";
 import { resolveService } from "../config/factory-config.ts";
 import { currentFactoryContext, seedFactoryContext } from "../config/factory-context.ts";
 import { JigsError } from "../errors.ts";
 import type { Factory, FactoryDefinition } from "../workflow/factory.ts";
 import { parseFactoryConfig } from "../workflow/factory-schema.ts";
-import { activeFactory } from "./active.ts";
-import { startAutomaticRelease } from "./automatic-release.ts";
+import { activeFactory, inactiveScheduleNames, inactiveTriggerNames } from "./active.ts";
 import { startWorld } from "./boot.ts";
-import { startDashboard } from "./dashboard.ts";
-import { startTriggers, withdrawInactive } from "./event-triggers/runner.ts";
-import { startSchedules } from "./schedules.ts";
+import { deploymentVersion, setDeploymentVersion } from "./role-state.ts";
+import { runAsOnlyCopy, runAsVersion } from "./versioned.ts";
 
 export { type AppDeps, createApp } from "./app.ts";
 /** @internal */
@@ -43,25 +46,52 @@ export function listenOnServicePort(): void {
 }
 
 /**
- * Start everything the service runs beside its routes: the World behind its startup checks, the
- * dashboard, schedules, event triggers and automatic release. Call it once, from the service's
- * Nitro plugin, with the factory configuration the service was built from.
+ * Pin the World to this copy's deployment version, `JIGS_DEPLOYMENT_VERSION`, when it has one, or
+ * exit naming what is wrong with it. Call it at the top level of the service's Nitro plugin,
+ * beside {@link listenOnServicePort}, before the World module is created.
+ */
+export function pinDeploymentVersion(): void {
+  try {
+    const ctx = currentFactoryContext();
+    const version = configuredDeploymentVersion(ctx);
+    if (version === undefined) return;
+    // biome-ignore lint/style/noProcessEnv: the SDK's own setting, derived from the factory's
+    process.env[WORLD_DEPLOYMENT_VARIABLE] = version;
+    setDeploymentVersion(version, configuredJobPrefix(ctx));
+  } catch (err) {
+    if (!(err instanceof JigsError)) throw err;
+    console.error(`[service] ${messageWithHint(err)}`);
+    process.exit(1);
+  }
+}
+
+function messageWithHint(err: JigsError): string {
+  if (err.hint === undefined) return err.message;
+  return `${err.message}\n${err.hint}`;
+}
+
+/**
+ * Start everything the service runs beside its routes: the World behind its startup checks, then
+ * the dashboard, schedules, event triggers, automatic release and the hub client. A copy with a
+ * deployment version runs those only while its version is current, and drains otherwise. Call it
+ * once, from the service's Nitro plugin, with the factory configuration the service was built
+ * from.
  */
 export function startService(factory: Factory, config: FactoryDefinition): void {
   seedFactoryContext(parseFactoryConfig(config));
-  // Started in this order and never awaited, the way Nitro runs separate
-  // plugins: each later part waits on the World's readiness itself.
   const live = activeFactory(factory);
+  logInactive(factory);
+  // Neither is awaited, the way Nitro runs separate plugins: the role waits
+  // on the World's readiness itself.
   void startWorld(live);
-  void startDashboard();
-  for (const name of Object.keys(factory.schedules ?? {}))
-    if (live.schedules?.[name] === undefined) console.log(`[schedule] ${name} inactive`);
-  const inactive = Object.keys(factory.triggers ?? {}).filter(
-    (name) => live.triggers?.[name] === undefined,
-  );
-  for (const name of inactive) console.log(`[trigger] ${name} inactive`);
-  startSchedules(live);
-  startTriggers(live);
-  void withdrawInactive(inactive);
-  startAutomaticRelease(factory);
+  const run = deploymentVersion() === undefined ? runAsOnlyCopy : runAsVersion;
+  void run(factory, live).catch((error: unknown) => {
+    console.error(`[service] could not start the factory: ${String(error)}`);
+    process.exit(1);
+  });
+}
+
+function logInactive(factory: Factory): void {
+  for (const name of inactiveScheduleNames(factory)) console.log(`[schedule] ${name} inactive`);
+  for (const name of inactiveTriggerNames(factory)) console.log(`[trigger] ${name} inactive`);
 }

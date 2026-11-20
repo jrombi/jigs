@@ -2,13 +2,11 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { dashboardRunUrl } from "../steps/runtime/run-context.ts";
 import { removeTmpDir, useTestFactory } from "../test-fixtures.ts";
 import { startDashboard } from "./dashboard.ts";
-import { onShutdown } from "./shutdown.ts";
 
 const close = vi.hoisted(() => vi.fn(async () => {}));
 const startServer = vi.hoisted(() => vi.fn(async () => ({ close })));
 vi.mock("workflow/runtime", () => ({ getWorld: async () => ({}) }));
 vi.mock("@workflow/web/server", () => ({ startServer }));
-vi.mock("./shutdown.ts", () => ({ onShutdown: vi.fn() }));
 
 let parent: string;
 beforeEach(() => {
@@ -35,8 +33,8 @@ test("JIGS_DASHBOARD_URL replaces localhost in run links while the dashboard kee
   expect(dashboardRunUrl("run-1")).toBe("https://jigs.example.com/run/run-1");
 });
 
-test("stopping the service closes the dashboard and drops its open connections", async () => {
-  await startDashboard();
-  await vi.mocked(onShutdown).mock.calls.at(-1)?.[0]();
+test("closing the dashboard drops its open connections", async () => {
+  const dashboard = await startDashboard();
+  await dashboard.close();
   expect(close).toHaveBeenCalledWith(true);
 });

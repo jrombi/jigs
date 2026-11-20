@@ -27,6 +27,8 @@ const SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGINT"];
 export interface Shutdown {
   onShutdown(closer: Closer, registration?: ShutdownRegistration): void;
   install(deps?: ShutdownDeps): void;
+  /** Shut down as a signal would, for a reason of the service's own, such as a drained version. */
+  begin(reason: string, deps?: ShutdownDeps): void;
 }
 
 export function createShutdown(): Shutdown {
@@ -35,16 +37,17 @@ export function createShutdown(): Shutdown {
   let installed = false;
   let shuttingDown = false;
 
-  async function run(signal: NodeJS.Signals, deps: ShutdownDeps) {
+  // `cause` names what started the shutdown; `label` is its short name for a repeat.
+  async function run(cause: string, label: string, deps: ShutdownDeps) {
     const log = deps.log ?? ((line: string) => console.log(line));
     const error = deps.error ?? ((line: string) => console.error(line));
     const exit = deps.exit ?? process.exit;
     if (shuttingDown) {
-      log(`[service] ${signal} ignored: already shutting down`);
+      log(`[service] ${label} ignored: already shutting down`);
       return;
     }
     shuttingDown = true;
-    log(`[service] ${signal} received, shutting down`);
+    log(`[service] ${cause}, shutting down`);
     const backstopMs = deps.backstopMs ?? SHUTDOWN_BACKSTOP_MS;
     const backstop = setTimeout(() => {
       error(`[service] shutdown still running after ${backstopMs}ms — exiting`);
@@ -84,8 +87,11 @@ export function createShutdown(): Shutdown {
       installed = true;
       const signals = deps.signals ?? process;
       for (const signal of SIGNALS) {
-        signals.on(signal, () => void run(signal, deps));
+        signals.on(signal, () => void run(`${signal} received`, signal, deps));
       }
+    },
+    begin(reason, deps = {}) {
+      void run(reason, reason, deps);
     },
   };
 }
@@ -96,3 +102,4 @@ export function createShutdown(): Shutdown {
 const shutdown = createShutdown();
 export const onShutdown: Shutdown["onShutdown"] = shutdown.onShutdown;
 export const installShutdown: Shutdown["install"] = shutdown.install;
+export const beginShutdown: Shutdown["begin"] = shutdown.begin;

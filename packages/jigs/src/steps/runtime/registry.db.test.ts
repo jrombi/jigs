@@ -67,11 +67,13 @@ dbTest("a fresh database gets the resource and trigger tables, twice without cha
     await ensureRegistry(fresh.db);
     await ensureRegistry(fresh.db);
     expect(await tables(fresh.db)).toEqual([
+      "jigs_deployments",
+      "jigs_live_turn_messages",
       "jigs_resources",
       "jigs_trigger_markers",
       "jigs_triggers",
     ]);
-    expect(await migrations(fresh.db)).toHaveLength(2);
+    expect(await migrations(fresh.db)).toHaveLength(3);
   } finally {
     await fresh.db.$client.end();
   }

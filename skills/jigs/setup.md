@@ -119,7 +119,10 @@ is up.
 `jigs up` is also the command after every change to the factory's code.
 `--restart-service` forces a restart, which a change to the environment
 (`.env`, `.env.local`) needs; `--force` skips the question about
-runs with a step executing.
+runs with a step executing. A hosted copy that deploys beside the previous
+one, such as a container, needs `JIGS_DEPLOYMENT_VERSION` in its environment
+and a `jigs deployments current <version>` once it is healthy; see
+`https://salimhamed.github.io/jigs/guide/cli#versions`.
 
 Then:
 

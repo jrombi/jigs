@@ -16,7 +16,6 @@ import type { ReleaseAction, ReleasePolicy, RunOutcome } from "../workflow/runti
 import { RELEASABLE_KINDS, type ResourceRecord } from "../workflow/runtime/resources.ts";
 import { isReady } from "./readiness.ts";
 import { runsWithActiveStep, worldRunFacts } from "./runs.ts";
-import { onShutdown } from "./shutdown.ts";
 
 /** Recovery interval for discovering terminal runs that still need cleanup. */
 export const AUTOMATIC_RELEASE_INTERVAL_MS = 60_000;
@@ -111,7 +110,10 @@ async function releaseFinishedRun(
   }
 }
 
-/** Start notification-fast cleanup with polling recovery and restart reconciliation. */
+/**
+ * Start notification-fast cleanup with polling recovery and restart reconciliation. The caller
+ * stops it before the World closes.
+ */
 export function startAutomaticRelease(
   factory: Factory,
   deps: AutomaticReleaseDeps = automaticReleaseDeps(),
@@ -200,7 +202,6 @@ export function startAutomaticRelease(
     stopPromise = Promise.allSettled([...tasks]).then(() => undefined);
     return stopPromise;
   };
-  onShutdown(stop, { phase: "quiesce" });
   return { stop };
 }
 

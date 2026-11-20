@@ -524,6 +524,20 @@ remove, and never deletes remote branches: `jigs resources prune` lists the ones
 runs left on GitHub. See
 `jigs resources` in [CLI commands](/guide/cli) to inspect what is left.
 
+## `deployments` {#deployments}
+
+How long a [version](/guide/concepts#versions) that is no longer current may
+take to finish its runs:
+
+```ts factory-options
+// Inside defineFactory({ ... }) in jigs.config.ts
+deployments: { maxDrainDays: 14 },
+```
+
+That is the default. The days count from when another version was made current.
+Once they pass, the draining version cancels the runs it still has and exits.
+Only copies with a `JIGS_DEPLOYMENT_VERSION` drain.
+
 ## `agents.env` {#agents-env}
 
 Agents do not inherit the service's environment. Each harness starts with a
@@ -837,6 +851,7 @@ These are this copy's own, in `.env.local`:
 | `WORKFLOW_POSTGRES_URL` | Always. This copy's database, on `JIGS_POSTGRES_PORT`. |
 | `JIGS_DASHBOARD_URL` | Optional. The address people open this copy's dashboard at when it is not `http://localhost:<JIGS_DASHBOARD_PORT>`, such as `https://jigs.example.com` behind a reverse proxy. Every dashboard link uses it: run links, Linear's Open button, and what `jigs up` and `jigs service status` print. The dashboard still listens on `JIGS_DASHBOARD_PORT`, on every network address, and has no sign-in, so keep the address private. |
 | `JIGS_HUB_TOKEN` | Once a workflow, binding or trigger uses GitHub, Linear, Slack or PagerDuty. The factory token the [hub](#hub) showed. GitHub, Linear, Slack and PagerDuty tokens come from the hub. |
+| `JIGS_DEPLOYMENT_VERSION` | Optional. The [version](/guide/cli#versions) this copy runs when copies deploy side by side, such as its image tag, made of letters, digits, `.`, `-`, `_` and `@`, at most 72 characters and not `postgres`. Only a copy with a version takes a role and drains. Laptops leave it out. jigs sets the World's `WORKFLOW_POSTGRES_DEPLOYMENT_ID` from it; the service refuses to start when that variable is set to anything else. |
 
 Also set any variable your `jigs.config.ts` names, such as an MCP server's
 `bearerTokenEnv`, in the file it belongs to.

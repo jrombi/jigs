@@ -207,6 +207,39 @@ started as soon as `jigs up` exits. `systemctl --user stop` or `restart` of this
 unit also kills the service and its agents, so stop the factory with
 `pnpm exec jigs down` or `pnpm exec jigs service stop` instead.
 
+## Versions
+
+A hosted factory can run several copies at once while it deploys. Each sets a
+**deployment version**, such as its image tag, and every run stays on the
+version that started it until it ends. One version is **current**: it is the
+factory. It hears the hub, fires triggers and schedules, releases resources and
+serves the dashboard and the API. Every other running version **drains**: it
+keeps only its queue worker, finishes the runs it started, and exits with code
+0 once none is left. See [Versions and draining](/guide/concepts#versions).
+
+| Command | What it does |
+| --- | --- |
+| `jigs deployments` | List every version that has run: its role (`current`, `draining`, or `gone` when no process has reported for five minutes), when it started, when it was last seen, the live runs it started, and its process. `--json` prints the same. |
+| `jigs deployments current <version>` | Make a version the factory. The one that was current drains. A hosted pipeline runs it once the new copy's `/health` reports `ready`, which a version reports only after it has recorded its boot. The version must have a running process, or the command refuses: the one current now would drain and exit, leaving no factory. `--force` makes it current anyway. |
+| `jigs deployments prune` | Forget versions that are not current and have no running process. A version that still has live runs is kept, and the command says so. `--cancel-runs` cancels those runs first, through the current service, then forgets the version. |
+
+The commands read the factory's database directly, so they work while the
+service is draining or stopped.
+
+A rollback starts the previous version first. A version that drained has
+exited, so deploy its build again, wait until it is healthy, then run
+`jigs deployments current <previous-version>`. `jigs deployments` shows a
+version with no running process as `none` under PROCESS.
+
+A copy that boots and finds another version current drains from the start: it
+does not take over. A copy whose version has never been current stays up until
+you stop it, so a smoke test or a hand-started copy never exits on its own.
+
+A hosted copy sets its version in its environment, as
+[`JIGS_DEPLOYMENT_VERSION`](/guide/configuration#env). A copy without one, such
+as the one `jigs up` runs on a laptop, is the factory's only copy: it has no
+role and never drains.
+
 ## Advanced/build
 
 | Command | What it does |

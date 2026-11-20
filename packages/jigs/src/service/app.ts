@@ -22,11 +22,19 @@ import type { Factory } from "../workflow/factory.ts";
 import { isOwnershipKind, parseHookToken } from "../workflow/hook-tokens.ts";
 import { UNRELEASED_STATES } from "../workflow/runtime/resources.ts";
 import { activeFactory } from "./active.ts";
+import { listDeployments } from "./deployments/store.ts";
 import { triggerStore } from "./event-triggers/store.ts";
 import { listTriggers, triggerChecks, triggerInstallations } from "./event-triggers/view.ts";
 import { startRun } from "./launch.ts";
 import { listRunDeadJobs } from "./queue.ts";
 import { bootPhase, isReady } from "./readiness.ts";
+import {
+  currentVersion,
+  deploymentBasePrefix,
+  deploymentVersion,
+  serviceRole,
+  whoIsCurrent,
+} from "./role-state.ts";
 import {
   listRunSteps,
   listRuns,
@@ -65,21 +73,50 @@ export function createApp(factory: Factory, deps: Partial<AppDeps> = {}): Reques
     next();
   });
 
-  // Liveness, plus how far the boot has got; dependency verification is
-  // preflight's job. Nitro serves this route before the plugins have run, so
-  // `ready` — not the 200 — is what `jigs up` waits on. With a
-  // service per factory repo, `factoryRoot` is the only thing that says which
-  // factory answers here, and `pid` which process.
+  // Liveness, plus how far the boot has got and which role this copy plays;
+  // dependency verification is preflight's job. Nitro serves this route before
+  // the plugins have run, so `ready` — not the 200 — is what `jigs up` waits
+  // on. With a service per factory repo, `factoryRoot` is the only thing that
+  // says which factory answers here, and `pid` which process. Answered by a
+  // draining copy too: a platform's liveness check must not kill a copy that
+  // is finishing its runs.
   app.get("/health", (_request, response) =>
     response.json({
       ok: true,
-      ready: isReady(),
+      ready: readyToServe(),
       phase: bootPhase(),
       world: processEnv().WORKFLOW_TARGET_WORLD ?? "local (default)",
       factoryRoot: factoryRootOrNull(context),
       pid: process.pid,
       workflows: Object.keys(factory.workflows),
       uptimeSeconds: Math.round(process.uptime()),
+      version: deploymentVersion() ?? null,
+      role: serviceRole() ?? null,
+      currentVersion: currentVersion(),
+    }),
+  );
+
+  // A versioned copy serves nothing but its liveness unless it is current: the
+  // current version is the factory, and a command that reached this copy
+  // should go there.
+  app.use((_request, response, next) => {
+    const refusal = whyNotServing();
+    if (refusal === undefined) {
+      next();
+      return;
+    }
+    response.status(503).json({
+      error: refusal,
+      version: deploymentVersion(),
+      currentVersion: currentVersion(),
+    });
+  });
+
+  // Every version that has run, with its role and the runs it still owns: what `jigs deployments` prints.
+  app.get("/api/deployments", async (_request, response) =>
+    response.json({
+      version: deploymentVersion() ?? null,
+      deployments: await listDeployments(registry(), context().slug, deploymentBasePrefix()),
     }),
   );
 
@@ -358,4 +395,24 @@ function dashboardPointer(ctx: FactoryContext, runId: string): string {
 async function heldTokens(world: AppDeps["world"], runId: string): Promise<string[]> {
   const hooks = await (await world()).hooks.list({ runId });
   return hooks.data.map((hook) => hook.token);
+}
+
+// Why this copy refuses the API, or undefined while it serves it. A copy with
+// no deployment version is the factory's only copy and always serves.
+// A versioned copy is ready once it has recorded its boot and read the current version, so a
+// deploy that waits on `ready` can make it current straight away.
+function readyToServe(): boolean {
+  if (!isReady()) return false;
+  return deploymentVersion() === undefined || serviceRole() !== undefined;
+}
+
+function whyNotServing(): string | undefined {
+  const version = deploymentVersion();
+  if (version === undefined) return undefined;
+  const role = serviceRole();
+  if (role === "current") return undefined;
+  if (role === undefined) {
+    return `this copy runs version ${version}, whose role is not known yet: it has not read the factory's current version`;
+  }
+  return `this copy runs version ${version}, which is draining; ${whoIsCurrent(currentVersion())}`;
 }

@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { z } from "zod";
 import { memoryTriggerStore } from "../test-fixtures.ts";
 import {
@@ -8,18 +8,11 @@ import {
   withdrawOccurrence,
 } from "./runner.ts";
 
-const quiescers = vi.hoisted((): Array<() => Promise<void>> => []);
-vi.mock("../shutdown.ts", () => ({
-  onShutdown: (close: () => Promise<void>) => {
-    quiescers.push(close);
-  },
-}));
-
 const T0 = new Date("2026-10-07T00:00:00.000Z");
 
 test("once the triggers shut down, a lookup rejects rather than read as no occurrence", async () => {
   const memory = memoryTriggerStore(() => T0, T0);
-  startTriggers(
+  const started = startTriggers(
     {
       workflows: { respond: { workflow: async () => undefined, inputs: z.object({}) } },
       triggers: {
@@ -45,7 +38,8 @@ test("once the triggers shut down, a lookup rejects rather than read as no occur
   );
   expect(await recordedOccurrences("github", "P1")).toEqual([]);
 
-  for (const close of quiescers) await close();
+  await started.stop();
+  await started.stop();
 
   await expect(recordedOccurrences("github", "P1")).rejects.toThrow("shut down");
   await expect(withdrawOccurrence({ trigger: "pages", occurrence: "P1" })).rejects.toThrow(
